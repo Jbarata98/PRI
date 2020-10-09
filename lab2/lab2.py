@@ -3,9 +3,9 @@ from os import getcwd, listdir
 from os.path import isfile, join
 from math import log
 from nltk import RegexpTokenizer
+import numpy as np
 
 import matplotlib.pyplot as plt
-import json
 
 
 def get_count(file):
@@ -33,14 +33,27 @@ def get_word_index(dir_name):
     return inverted_list
 
 
-def terms_histogram(inverted_list):
+def terms_bar_plot(inverted_list):
     doc_terms = defaultdict(list)
     for word, indexes in inverted_list.items():
         for i, iid in enumerate(indexes):
-            doc_terms[iid[0]].append(word)
-    plt.hist(doc_terms.values())
+            doc_terms[iid[0]] += [word]*iid[1]
+    plt.figure(figsize=(10, 5))
+    plt.hist(doc_terms.values(), bins=len(inverted_list), label=doc_terms.keys())
     plt.xticks(rotation=75)
-    # plt.show()
+    plt.legend()
+    plt.show()
+    return("<plot>")
+
+
+def tokens_hist(inverted_list):
+    doc_terms = defaultdict(int)
+    for word, indexes in inverted_list.items():
+        for i, iid in enumerate(indexes):
+            doc_terms[iid[0]] += 1
+    plt.figure(figsize=(10, 5))
+    plt.hist(np.array(list(doc_terms.values())), bins=5)
+    plt.show()
 
 
 def idf(inverted_list):
@@ -73,11 +86,11 @@ def similarity(query, idf_stats):
 
 def main():
     print("1\n  1.1\n    a)")
-    word_index = get_word_index("../lab_1/brxts")
+    word_index = get_word_index("../lab1/brxts")
     for word, indexes in word_index.items():
         print(f'      {word:10}: {len(indexes):2}: {indexes}')
     print("    b)")
-    print("  1.2\n", terms_histogram(word_index))
+    print("  1.2\n", tokens_hist(word_index))
     idf_stats = get_idf_stats(word_index)
     print("  1.3\n", idf_stats)
     print("2\n  2.1\n", ret_ocurrences('barata', idf_stats))
