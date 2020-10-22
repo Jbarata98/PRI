@@ -1,4 +1,8 @@
 
 lab3/indexdir/*
 lab3/output.txt
+project/collection/rcv1
+project/collection/rcv1.tar.xz
+
 *.pyc
+project/collection/output
