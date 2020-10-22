@@ -38,7 +38,7 @@ class InvertedIndex:
         return self.boolean_index.vocabulary_
 
     def get_matrix_data(self):
-        return f'{self.idf}\n\n{self.vocabulary}'
+        return {'len': len(self.idf), 'vocabulary': self.vocabulary, 'idf': self.idf}
 
 
 def indexing(D, preprocess=None, *args):
@@ -74,9 +74,9 @@ def main():
     train_dirs.append(TRAIN_DATE_SPLIT)
 
     train_docs = {}
-    for directory in train_dirs[:1]:
+    for directory in tqdm(train_dirs[:10], desc=f'INDEXING:'):
         train_docs[directory] = []
-        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:10], desc=f'dir:{directory}'):
+        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:1000], desc=f'DIR[{directory}]', leave=False):
             train_docs[directory].append(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
 
     # print(json.dumps(train_docs, indent=2))
