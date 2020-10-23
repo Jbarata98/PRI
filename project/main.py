@@ -18,6 +18,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from nltk import word_tokenize
 from nltk.stem import WordNetLemmatizer
+from whoosh import index
+from whoosh.fields import *
+from whoosh.qparser import *
 
 nltk.download('wordnet')
 
@@ -57,15 +60,27 @@ def SimplePreprocessor(article):
 class InvertedIndex:
     def __init__(self, D, preprocessor=None, tokenizer=None):
         self.test = D['test']
-        raw_text_test = self._raw_text_from_dict(self.test)
-        self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
-        self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
-        self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
-        self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
+        # raw_text_test = self._raw_text_from_dict(self.test)
+        # self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
+        # self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
+        # self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
+        # self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
+        self._save_index(self.test)
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
         return [' '.join(list(doc.values())) for doc in doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
+
+    @staticmethod
+    def _save_index(D):
+        if not os.path.exists("whoosh"):
+            os.mkdir("whoosh")
+        schema = Schema(id=ID(stored=True), **{tag: TEXT() for tag in AVAILABLE_DATA})  # Schema
+        ix = index.create_in("whoosh", schema)
+        writer = ix.writer()
+        for doc_id, doc in tqdm(D.items(), desc=f'{"INDEXING WHOOSH":20}'):
+            writer.add_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
+        writer.commit()
 
     @property
     def idf(self):
@@ -78,6 +93,16 @@ class InvertedIndex:
     @property
     def doc_ids(self):
         return [doc_id for doc_id in self.test.keys()]
+
+    def search_index(self, string, k=10):
+        id_list = []
+        ix = index.open_dir("whoosh")
+        with ix.searcher() as searcher:
+            q = QueryParser("p", ix.schema, group=OrGroup).parse(string)
+            results = searcher.search(q, limit=k)
+            for r in results:
+                id_list.append((r['id'], r.score))
+        return id_list
 
     def get_term_idf(self, term):
         return 0 if term not in self.vocabulary else self.idf[self.vocabulary[term]]
@@ -116,8 +141,13 @@ def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
 def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
     extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
+    print(extracted_terms)
     dot_product = numpy.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
     return [doc_id for i, doc_id in enumerate(I.doc_ids) if dot_product[i] >= round(BOOLEAN_ROUND_TOLERANCE * k)]
+
+
+def ranking(q, p, I: InvertedIndex, *args):
+    return I.search_index(' '.join(topics[q].values()), p)
 
 
 def parse_xml_doc(filename):
@@ -190,15 +220,16 @@ def main():
         train_dirs.append(TRAIN_DATE_SPLIT)
 
         docs = {'train': {}, 'test': {}}
-        read_documents(docs, test_dirs[:5], 'test', sample_size=1000)
+        read_documents(docs, test_dirs[:1], 'test', sample_size=1000)
         # read_documents(docs, test_dirs[:5], 'train')
 
         with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
             f.write(json.dumps(docs, indent=4))
 
     # print(json.dumps(train_docs, indent=2))
-    I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
-    print(I.get_matrix_data())
+    # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
+    I, indexing_time, indexing_space = indexing(docs, preprocessor=None, tokenizer=None)
+    # print(I.get_matrix_data())
     global topics, qrels, labeled_docs
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     qrels, labeled_docs = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
@@ -206,9 +237,10 @@ def main():
     for q in topics:
         # print('Topic:', topics[q], sep='\n')
         # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
-        doc_ids = boolean_query(q, I, k=10, metric='tfidf')
+        # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
-        print(sorted(doc_ids), sorted(qrels[q]), '\n', sep='\n')
+        # print(sorted(doc_ids), sorted(qrels[q]), '\n', sep='\n')
+        print(ranking(q, 30, I))
     return 0
 
 
