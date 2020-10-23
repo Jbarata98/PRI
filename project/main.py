@@ -1,10 +1,14 @@
 import os
+import re
 import time
 import tarfile
 import json
 import numpy
+import nltk
+import string
 
 from library import *
+from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -12,10 +16,15 @@ from pympler import asizeof
 from itertools import groupby
 from bs4 import BeautifulSoup
 from tqdm import tqdm
+from nltk import word_tokenize
+from nltk.stem import WordNetLemmatizer
+
+nltk.download('wordnet')
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
 DATASET = 'rcv1'
+QRELS = 'qrels.test.txt'
 TRAIN_DATE_SPLIT = '19960930'
 AVAILABLE_DATA = ('headline', 'p', 'dateline', 'byline')
 DATA_HEADER = ('newsitem', 'itemid')
@@ -23,18 +32,36 @@ TOPICS = "topics.txt"
 TOPICS_CONTENT = ('num', 'title', 'desc', 'narr')
 DEFAULT_K = 5
 BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
+OVERRIDE_SAVED_JSON = False
 
 topics = {}
+qrels = {}
+labeled_docs = []
+
+
+class LemmaTokenizer(object):
+    def __init__(self):
+        self.wnl = WordNetLemmatizer()
+
+    def __call__(self, articles):
+        return [self.wnl.lemmatize(t) for t in word_tokenize(articles)]
+
+
+def SimplePreprocessor(article):
+    def remove_chars_re(subj, chars):
+        return re.sub(u'(?u)[' + re.escape(chars) + ']', ' ', subj)
+
+    return remove_chars_re(article.lower(), string.punctuation)
 
 
 class InvertedIndex:
-    def __init__(self, D, preprocessor=None):
-        raw_text_list = self._raw_text_from_dict(D)
-        self.D = D
-        self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True)
-        self.boolean_matrix = self.boolean_index.fit_transform(raw_text_list)
-        self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, vocabulary=self.boolean_index.vocabulary)
-        self.tfidf_matrix = self.tfidf_index.fit_transform(raw_text_list)
+    def __init__(self, D, preprocessor=None, tokenizer=None):
+        self.test = D['test']
+        raw_text_test = self._raw_text_from_dict(self.test)
+        self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
+        self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
+        self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
+        self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
@@ -50,7 +77,7 @@ class InvertedIndex:
 
     @property
     def doc_ids(self):
-        return [doc_id for doc_id in self.D.keys()]
+        return [doc_id for doc_id in self.test.keys()]
 
     def get_term_idf(self, term):
         return 0 if term not in self.vocabulary else self.idf[self.vocabulary[term]]
@@ -68,15 +95,15 @@ class InvertedIndex:
         return self.tfidf_index.build_analyzer()
 
 
-def indexing(D, preprocess=None, *args):
+def indexing(D, preprocessor=None, tokenizer=None, *args):
     start_time = time.time()
     # print(json.dumps(train_docs, indent=2))
-    I = InvertedIndex(D, preprocessor=preprocess)
+    I = InvertedIndex(D, preprocessor=preprocessor, tokenizer=tokenizer)
     return I, time.time() - start_time, asizeof.asizeof(I)
 
 
 def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
-    raw_text = ' '.join(topics[q].values())
+    raw_text, term_scores = ' '.join(topics[q].values()), []
     if metric == 'tfidf':
         scores = I.tfidf_transform([raw_text]).todense().A[0]
         term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
@@ -89,7 +116,7 @@ def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
 def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
     extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
-    dot_product = numpy.dot(topic_boolean.A, I.boolean_matrix.A.T)[0]
+    dot_product = numpy.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
     return [doc_id for i, doc_id in enumerate(I.doc_ids) if dot_product[i] >= round(BOOLEAN_ROUND_TOLERANCE * k)]
 
 
@@ -128,35 +155,60 @@ def tqdm_generator(members, n):
         yield member
 
 
+def read_documents(docs, dirs, mode='test', sample_size=None):
+    docs[mode] = {}
+    for directory in tqdm(dirs, desc=f'{"READING TEST":20}'):
+        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:sample_size], desc=f'{f"  DIR[{directory}]":20}', leave=False):
+            docs['test'].update(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
+
+
+def parse_qrels(filename):
+    parsed_qrels, labeled_list = defaultdict(list), []
+    with open(filename, encoding='utf8') as f:
+        for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
+            q_id, doc_id, relevance = line.split()
+            if int(relevance.replace('\n', '')):
+                parsed_qrels[q_id].append(doc_id)
+            labeled_list.append(doc_id)
+
+    return dict(parsed_qrels), labeled_list
+
+
 def main():
     global topics
-    if os.path.isdir(COLLECTION_PATH + 'rcv1'):
+    if os.path.isdir(f'{COLLECTION_PATH}{DATASET}'):
         print(f'Directory "{DATASET}" already exists, moving on to indexing.', flush=True)
     else:
         print('Directory "rcv1" not found. Extracting "rcv.tar.xz"', flush=True)
         with tarfile.open('collection/rcv1.tar.xz', 'r:xz') as D:
             D.extractall('collection/', members=tqdm_generator(D, COLLECTION_LEN))
 
-    train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3], lambda x: x == TRAIN_DATE_SPLIT) if not key]
-    train_dirs.append(TRAIN_DATE_SPLIT)
+    if not OVERRIDE_SAVED_JSON and os.path.isfile(f'{COLLECTION_PATH}{DATASET}.json'):
+        docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}.json', encoding='ISO-8859-1').read())
+    else:
+        train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3], lambda x: x == TRAIN_DATE_SPLIT) if not key]
+        train_dirs.append(TRAIN_DATE_SPLIT)
 
-    train_docs = {}
-    for directory in tqdm(train_dirs[:], desc=f'{"INDEXING":15}'):
-        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:10], desc=f'{f"  DIR[{directory}]":15}', leave=False):
-            train_docs.update(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
+        docs = {'train': {}, 'test': {}}
+        read_documents(docs, test_dirs[:5], 'test', sample_size=1000)
+        # read_documents(docs, test_dirs[:5], 'train')
+
+        with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
+            f.write(json.dumps(docs, indent=4))
 
     # print(json.dumps(train_docs, indent=2))
-    I, indexing_time, indexing_space = indexing(train_docs)
-    # print(I.get_matrix_data())
-    global topics
+    I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
+    print(I.get_matrix_data())
+    global topics, qrels, labeled_docs
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
+    qrels, labeled_docs = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
-    print(I.doc_ids)
     for q in topics:
-        print('Topic:', topics[q], sep='\n')
-        print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
-        doc_ids = boolean_query(q, I, k=5, metric='tfidf')
-        print("Relevant documents:", [I.D[doc_id] for doc_id in doc_ids])
+        # print('Topic:', topics[q], sep='\n')
+        # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
+        doc_ids = boolean_query(q, I, k=10, metric='tfidf')
+        # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
+        print(sorted(doc_ids), sorted(qrels[q]), '\n', sep='\n')
     return 0
 
 
