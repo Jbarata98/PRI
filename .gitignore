@@ -8,3 +8,4 @@ project/collection/rcv1.tar.xz
 project/collection/output
 project/collection/rcv1_full.json
 project/collection/rcv1.json
+project/whoosh/*

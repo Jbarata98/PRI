@@ -80,11 +80,11 @@ class InvertedIndex:
     def _save_index(D):
         if not os.path.exists("whoosh"):
             os.mkdir("whoosh")
-        schema = Schema(id=ID(stored=True), **{tag: TEXT() for tag in AVAILABLE_DATA})  # Schema
+        schema = Schema(id=ID(stored=True, unique=True), **{tag: TEXT(phrase=False) for tag in AVAILABLE_DATA})  # Schema
         ix = index.create_in("whoosh", schema)
         writer = ix.writer()
         for doc_id, doc in tqdm(D.items(), desc=f'{"INDEXING WHOOSH":20}'):
-            writer.add_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
+            writer.update_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
         writer.commit()
 
     @property
@@ -103,7 +103,9 @@ class InvertedIndex:
         id_list = []
         ix = index.open_dir("whoosh")
         with ix.searcher() as searcher:
-            q = QueryParser("p", ix.schema, group=OrGroup).parse(string)
+            q = MultifieldParser(AVAILABLE_DATA, ix.schema, group=OrGroup)
+            q.remove_plugin_class(PhrasePlugin)
+            q = q.parse(string)
             results = searcher.search(q, limit=k)
             for r in results:
                 id_list.append((r['id'],r.score))
@@ -276,27 +278,13 @@ def parse_qrels(filename):
 
 def main():
     global topics
-    if os.path.isdir(f'{COLLECTION_PATH}{DATASET}'):
-        print(f'Directory "{DATASET}" already exists, moving on to indexing.', flush=True)
-    else:
-        print('Directory "rcv1" not found. Extracting "rcv.tar.xz"', flush=True)
-        with tarfile.open('collection/rcv1.tar.xz', 'r:xz') as D:
-            D.extractall('collection/', members=tqdm_generator(D, COLLECTION_LEN))
+    extract_dataset()
 
     if not OVERRIDE_SAVED_JSON and os.path.isfile(f'{COLLECTION_PATH}{DATASET}.json'):
         docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}.json', encoding='ISO-8859-1').read())
     else:
-        train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3], lambda x: x == TRAIN_DATE_SPLIT) if not key]
-        train_dirs.append(TRAIN_DATE_SPLIT)
+        docs = parse_dataset()
 
-        docs = {'train': {}, 'test': {}}
-        read_documents(docs, test_dirs[:1], 'test', sample_size=1000)
-        # read_documents(docs, test_dirs[:5], 'train')
-
-        with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
-            f.write(json.dumps(docs, indent=4))
-
-    # print(json.dumps(train_docs, indent=2))
     # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
     I, indexing_time, indexing_space = indexing(docs, preprocessor=None, tokenizer=None)
     # print(I.get_matrix_data())
@@ -304,23 +292,45 @@ def main():
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     qrels, labeled_docs = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
-    for q in topics:
-        print("Topic:", q)
+
+    for q in tqdm(topics, desc=f'{f"BOOLEAN RETRIEVAL":20}'):
+        # print("Topic:", q)
         # print('Topic:', topics[q], sep='\n')
         # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
         # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
+        pass
 
+
+    for q in tqdm(topics, desc=f'{f"RANKING":20}'):
+        print(ranking(q, 30, I))
         doc_ids = ranking(q, MaxMRRRank, I)
         print("Predicted:", sorted(doc_ids),
               "Expected:", sorted(qrels[q]),
-              "Precision Measures:", calc_precision_based_measures(sorted([ids[0] for ids in doc_ids]), sorted(qrels[q]),nr_documents=NR_DOCUMENTS),
+              "Precision Measures:", calc_precision_based_measures(sorted([ids[0] for ids in doc_ids]), sorted(qrels[q]),nr_documents=MaxMRRRank),
               "Gain Measures:", calc_gain_based_measures(sorted([scores[1] for scores in doc_ids]),nr_documents=MaxMRRRank),
                MRR(sorted([int(ids[0]) for ids in doc_ids]),sorted(int(expected) for expected in qrels[q])),'\n', sep='\n')
-
-
     return 0
 
+
+def parse_dataset():
+    train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3], lambda x: x == TRAIN_DATE_SPLIT) if not key]
+    train_dirs.append(TRAIN_DATE_SPLIT)
+    docs = {'train': {}, 'test': {}}
+
+    read_documents(docs, test_dirs[:1], 'test', sample_size=1000)
+    with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
+        f.write(json.dumps(docs, indent=4))
+    return docs
+
+
+def extract_dataset():
+    if os.path.isdir(f'{COLLECTION_PATH}{DATASET}'):
+        print(f'Directory "{DATASET}" already exists, moving on to indexing.', flush=True)
+    else:
+        print('Directory "rcv1" not found. Extracting "rcv.tar.xz"', flush=True)
+        with tarfile.open('collection/rcv1.tar.xz', 'r:xz') as D:
+            D.extractall('collection/', members=tqdm_generator(D, COLLECTION_LEN))
 
 
 if __name__ == '__main__':
