@@ -9,3 +9,4 @@ project/collection/output
 project/collection/rcv1_full.json
 project/collection/rcv1.json
 project/whoosh/*
+project/collection/rcv1_sub.json
