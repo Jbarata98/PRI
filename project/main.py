@@ -50,6 +50,8 @@ EVAL_SAMPLE_SIZE = 3000
 topics = {}
 topic_index = {}
 doc_index = []
+non_relevant_index = {}
+non_relevant = []
 
 def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str, show_points=False, xpercentage=False, ypercentage=False):
     legend: list = []
@@ -220,7 +222,7 @@ def precision_recall_generator(predicted, expected):
 
 
 ''' Code Adapted from https://gist.github.com/bwhite/3726239'''
-def calc_gain_based_measures(scores, nr_documents=10, metric=None):
+def calc_gain_based_measures(scores, nr_documents=10, metric=None): #isto n deve tar bem
     def dcg(scores, k):
         r = np.asfarray(scores)[:k]
         if r.size:
@@ -235,7 +237,7 @@ def calc_gain_based_measures(scores, nr_documents=10, metric=None):
 
     metrics = {
         'dcg': dcg,
-        'ndcg': ndcg
+        'ndcg': ndcg #??
     }
 
     if metric is None:
@@ -244,13 +246,39 @@ def calc_gain_based_measures(scores, nr_documents=10, metric=None):
             metric}
 
 
-def MRR(predicted, expected, metric=None):
+def MRR(predicted, expected):
     MRR = 0
     for i, qid in zip(range(MaxMRRRank), predicted):
         if qid in expected:
             MRR += 1 / (i + 1)
             break
     return {'MRR': MRR}
+
+
+
+def BPREF(predicted,relevant,non_relevant):
+
+    relevant_answers,non_relevant_answers = set(predicted).intersection(set(relevant)),set(predicted).intersection(set(non_relevant))
+    counter = 0
+    Bpref = 0
+    sum = 0
+    if len(relevant_answers) == 0:
+        return Bpref
+    if len(non_relevant_answers) == 0: #idk
+        Bpref = 1/len(relevant_answers) + 1
+        return Bpref
+    else:
+        for rel in relevant_answers:
+            for pred in predicted:
+                if pred in non_relevant_answers:
+                    counter+=1
+                elif pred is rel:
+                    sum +=(1-(counter/min(len(relevant_answers),len(non_relevant_answers))))
+                    counter = 0
+        Bpref = 1/len(relevant_answers) + sum
+
+        return {'BPREF': Bpref}
+
 
 
 def parse_xml_doc(filename):
@@ -297,15 +325,18 @@ def read_documents(dirs, sample_size=None):
 
 
 def parse_qrels(filename):
-    topic_index, doc_index = defaultdict(list), defaultdict(list)
+    topic_index, doc_index,non_relevant_index,non_relevant = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     with open(filename, encoding='utf8') as f:
         for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
             q_id, doc_id, relevance = line.split()
             if int(relevance.replace('\n', '')):
                 topic_index[q_id].append(doc_id)
                 doc_index[doc_id].append(q_id)
+            else:
+                non_relevant_index[q_id].append(doc_id)
+                non_relevant[doc_id].append(q_id)
 
-    return dict(topic_index), dict(doc_index)
+    return dict(topic_index), dict(doc_index),dict(non_relevant_index), dict(non_relevant)
 
 
 def get_subset(adict, subset):
@@ -313,12 +344,12 @@ def get_subset(adict, subset):
 
 
 def main():
-    global topics, topic_index, doc_index
+    global topics, topic_index, doc_index,non_relevant_index,non_relevant
 
     extract_dataset()
 
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
-    topic_index, doc_index = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
+    topic_index, doc_index,non_relevant_index,non_relevant= parse_qrels(f"{COLLECTION_PATH}{QRELS}")
 
     if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_sub.json'):
         print(f"{DATASET}_sub.json found, loading it...")
@@ -340,10 +371,17 @@ def main():
 
     sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
     doc_index = get_subset(doc_index, sampled_doc_ids)
-    topic_index = defaultdict(list)
+    non_relevant = get_subset(non_relevant, sampled_doc_ids)
+    topic_index, non_relevant_index  = defaultdict(list), defaultdict(list)
+
     for doc_id, doc_topics in doc_index.items():
         for doc_topics in doc_topics:
             topic_index[doc_topics].append(doc_id)
+
+    for doc_id, doc_topics in non_relevant.items():
+        for doc_topics in doc_topics:
+            non_relevant_index[doc_topics].append(doc_id)
+
     docs = get_subset(docs, doc_index)
 
 
@@ -367,13 +405,15 @@ def main():
               "Expected:", sorted(topic_index[q]),
               "Precision Measures:", calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
               "Gain Measures:", calc_gain_based_measures([scores[1] for scores in doc_ids], nr_documents=MaxMRRRank),
+              "MRR:", MRR([ids[0] for ids in doc_ids],topic_index[q]),
+              "BPREF:" , BPREF([ids[0] for ids in doc_ids],topic_index[q],non_relevant_index[q]),
               '\n', sep='\n')
         pr = precision_recall_generator([ids[0] for ids in doc_ids], topic_index[q])
         Y[q], X[q] = zip(*[[p, r] for (p, r) in pr])
-        if len(Y) == 5:
-            multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
-            Y = {}
-        plt.show()
+        #if len(Y) == 5:
+        #    multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
+        #    Y = {}
+        #plt.show()
 
     return 0
 
