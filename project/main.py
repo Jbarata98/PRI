@@ -15,6 +15,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import precision_recall_curve
+from ir_evaluation.effectiveness import effectiveness
+
 
 import ml_metrics
 from pympler import asizeof
@@ -29,6 +31,8 @@ from whoosh.qparser import *
 from whoosh.analysis import *
 
 nltk.download('wordnet')
+ir = effectiveness() # --> an object, which we can use all methods in it, is created
+
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -52,6 +56,7 @@ topic_index = {}
 doc_index = []
 non_relevant_index = {}
 non_relevant = []
+
 
 def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str, show_points=False, xpercentage=False, ypercentage=False):
     legend: list = []
@@ -211,14 +216,12 @@ def calc_precision_based_measures(predicted_ids, expected_ids, nr_documents=10, 
     return {measure: metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids]) for measure in metric}
 
 
-
 def precision_recall_generator(predicted, expected):
     tp = 0
     for i, id in enumerate(predicted):
         if id in expected:
             tp += 1
         yield tp / (i + 1), tp / max(1, len(expected))
-
 
 
 ''' Code Adapted from https://gist.github.com/bwhite/3726239'''
@@ -346,11 +349,15 @@ def get_subset(adict, subset):
 def main():
     global topics, topic_index, doc_index,non_relevant_index,non_relevant
 
+    # EXTRACTION
     extract_dataset()
 
+    # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     topic_index, doc_index,non_relevant_index,non_relevant= parse_qrels(f"{COLLECTION_PATH}{QRELS}")
+    # </Build Q>
 
+    # <Dataset processing>
     if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_sub.json'):
         print(f"{DATASET}_sub.json found, loading it...")
         docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}.json', encoding='ISO-8859-1').read())
@@ -368,22 +375,19 @@ def main():
             print(f"Saving eval set to {DATASET}_sub.json...")
             with open(f'{COLLECTION_PATH}{DATASET}_sub.json', 'w', encoding='ISO-8859-1') as f:
                 f.write(json.dumps(docs, indent=4))
+    # </Dataset processing>
 
+    # <Build D>
     sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
     doc_index = get_subset(doc_index, sampled_doc_ids)
     non_relevant = get_subset(non_relevant, sampled_doc_ids)
     topic_index, non_relevant_index  = defaultdict(list), defaultdict(list)
 
-    for doc_id, doc_topics in doc_index.items():
-        for doc_topics in doc_topics:
-            topic_index[doc_topics].append(doc_id)
-
-    for doc_id, doc_topics in non_relevant.items():
-        for doc_topics in doc_topics:
-            non_relevant_index[doc_topics].append(doc_id)
+    topic_index = invert_index(doc_index)
+    non_relevant_index = invert_index(non_relevant)
 
     docs = get_subset(docs, doc_index)
-
+    # </Build D>
 
     # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
     I, indexing_time, indexing_space = indexing(docs, preprocessor=None, tokenizer=None)
@@ -398,6 +402,72 @@ def main():
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
         pass
 
+    # old_ranking(I, topic_index, topics)
+    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    for q in tqdm(topics, desc=f'{f"RANKING":20}'):
+        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
+        precision_result = {
+            'total_result': len(retrieved_doc_ids),
+            'visited_documents': retrieved_doc_ids,
+            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)}
+        }
+        precision_results[q].update(precision_result)
+
+    print("Average Precision@n:")
+    ap_at_n = ir.ap_at_n(precision_results, [5, 10, 15, 20, 'all'])
+    print(ap_at_n)
+
+    print("\n")
+
+    print("R-Precision@n:")
+    rprecision = ir.rprecision(precision_results, [5, 10, 15, 20, 'all'])
+    print(rprecision)
+
+    print("\n")
+
+    print("Mean Average Precision:")
+    mean_ap = ir.mean_ap(precision_results, [5, 10, 15, 20, 'all'])
+    print(mean_ap)
+
+    print("\n")
+
+    print("F-Measure:")
+    fmeasure = ir.fmeasure(precision_results, [5, 10, 15, 20, 'all'])
+    print(fmeasure)
+
+    print("\n")
+    ########################################################################################
+    # parameters -> (data, constant, boundaries)
+
+    print("Geometric Mean Average Precision:")
+    gmap = ir.gmap(precision_results, 0.3, [5, 10, 15, 20, 'all'])
+    print(gmap)
+
+    print("\n")
+    ########################################################################################
+    # parameters -> (data)
+
+    print("Eleven Point - Interpolated Average Precision:")
+    print("Recall => Precision")
+    iap = ir.iap(precision_results)
+    print(iap)
+    X, Y = {}, {}
+    X[''], Y[''] = zip(*(iap.items()))
+    X[''] = [float(val) for val in X['']]
+    multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision', False, True, True)
+    plt.show()
+    return 0
+
+
+def invert_index(index):
+    inverted_index = defaultdict(list)
+    for id, indexed_ids in index.items():
+        for indexed_id in indexed_ids:
+            inverted_index[indexed_id].append(id)
+    return dict(inverted_index)
+
+
+def old_ranking(I, topic_index, topics):
     Y, X = {}, {}
     for q in tqdm(topics, desc=f'{f"RANKING":20}'):
         doc_ids = ranking(q, 500, I)
@@ -414,8 +484,6 @@ def main():
         #    multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
         #    Y = {}
         #plt.show()
-
-    return 0
 
 
 def parse_dataset():
