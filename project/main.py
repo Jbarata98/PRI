@@ -51,16 +51,22 @@ topics = {}
 topic_index = {}
 doc_index = []
 
-def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str, percentage=False):
+def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str, show_points=False, xpercentage=False, ypercentage=False):
     legend: list = []
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    if percentage:
+    if xpercentage:
+        ax.set_xlim(0.0, 1.0)
+    if ypercentage:
         ax.set_ylim(0.0, 1.0)
 
+    x = xvalues
     for name, y in yvalues.items():
-        ax.plot(xvalues, y)
+        if isinstance(xvalues, dict):
+            x = xvalues[name]
+        ax.plot(x, y)
+        ax.scatter(x, y, 20, alpha=0.5)
         legend.append(name)
     ax.legend(legend, loc='best', fancybox=True, shadow=True, borderaxespad=0)
 
@@ -354,17 +360,19 @@ def main():
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
         pass
 
+    Y, X = {}, {}
     for q in tqdm(topics, desc=f'{f"RANKING":20}'):
-        doc_ids = ranking(q, 100, I)
+        doc_ids = ranking(q, 500, I)
         print("Predicted:", sorted(doc_ids),
               "Expected:", sorted(topic_index[q]),
               "Precision Measures:", calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
               "Gain Measures:", calc_gain_based_measures([scores[1] for scores in doc_ids], nr_documents=MaxMRRRank),
               '\n', sep='\n')
         pr = precision_recall_generator([ids[0] for ids in doc_ids], topic_index[q])
-        Y = {}
-        Y['precision'], recall = zip(*[[p, r] for (p, r) in pr])
-        multiple_line_chart(plt.gca(), recall, Y, 'Precision-Recall Curve', 'recall', 'precision')
+        Y[q], X[q] = zip(*[[p, r] for (p, r) in pr])
+        if len(Y) == 5:
+            multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
+            Y = {}
         plt.show()
 
     return 0
