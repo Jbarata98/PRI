@@ -40,7 +40,7 @@ TOPICS_CONTENT = ('num', 'title', 'desc', 'narr')
 DEFAULT_K = 5
 BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
 OVERRIDE_SAVED_JSON = False
-NR_DOCUMENTS = 5
+MaxMRRRank = 10
 
 topics = {}
 qrels = {}
@@ -212,12 +212,10 @@ def calc_gain_based_measures(scores,nr_documents = 10, metric=None):
 
 def MRR(predicted,expected,metric = None):
     MRR = 0
-    for qid in predicted:
-        for i in range(0,NR_DOCUMENTS):
-            if qid in expected:
-                    MRR += 1 / (i + 1)
-    MRR = MRR / len(predicted)
-
+    for i, qid in zip(range(MaxMRRRank), predicted):
+        if qid in expected:
+            MRR += 1 / (i + 1)
+            break
     return {'MRR': MRR}
 
 
@@ -313,11 +311,11 @@ def main():
         # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
 
-        doc_ids = ranking(q, NR_DOCUMENTS, I)
+        doc_ids = ranking(q, MaxMRRRank, I)
         print("Predicted:", sorted(doc_ids),
               "Expected:", sorted(qrels[q]),
               "Precision Measures:", calc_precision_based_measures(sorted([ids[0] for ids in doc_ids]), sorted(qrels[q]),nr_documents=NR_DOCUMENTS),
-              "Gain Measures:", calc_gain_based_measures(sorted([scores[1] for scores in doc_ids]),nr_documents=NR_DOCUMENTS),
+              "Gain Measures:", calc_gain_based_measures(sorted([scores[1] for scores in doc_ids]),nr_documents=MaxMRRRank),
                MRR(sorted([int(ids[0]) for ids in doc_ids]),sorted(int(expected) for expected in qrels[q])),'\n', sep='\n')
 
 
