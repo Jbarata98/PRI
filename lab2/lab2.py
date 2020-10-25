@@ -52,7 +52,7 @@ def tokens_hist(inverted_list):
         for i, iid in enumerate(indexes):
             doc_terms[iid[0]] += 1
     plt.figure(figsize=(10, 5))
-    plt.hist(np.array(list(doc_terms.values())), bins=5)
+    plt.hist(np.array(list(doc_terms.values())), bins=8)
     plt.show()
 
 

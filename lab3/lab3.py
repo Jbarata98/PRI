@@ -3,6 +3,21 @@ from whoosh import index
 from whoosh.fields import *
 from whoosh.qparser import *
 
+# 1
+# 1.1
+
+
+if not os.path.exists("indexdir"):
+    os.mkdir("indexdir")
+
+schema = Schema(id=NUMERIC(stored=True), content=TEXT)
+ix = index.create_in("indexdir", schema)
+writer = ix.writer()
+writer.add_document(id=1, content=u"This is my document!")
+writer.add_document(id=2, content=u"This is the second example.")
+writer.add_document(id=3, content=u"Examples are many.")
+writer.commit()
+
 
 # 1
 # 1.1
@@ -29,7 +44,6 @@ def search_index(string, k=10):
         for r in results:
             id_list.append(r['id'])
     return id_list
-
 
 # 2
 # 2.1

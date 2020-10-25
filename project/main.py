@@ -3,15 +3,19 @@ import re
 import time
 import tarfile
 import json
-import numpy
+import numpy as np
 import nltk
 import string
+import matplotlib.pyplot as plt
+from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
 
-from library import *
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import precision_recall_curve
+
+import ml_metrics
 from pympler import asizeof
 from itertools import groupby
 from bs4 import BeautifulSoup
@@ -36,6 +40,7 @@ TOPICS_CONTENT = ('num', 'title', 'desc', 'narr')
 DEFAULT_K = 5
 BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
 OVERRIDE_SAVED_JSON = False
+NR_DOCUMENTS = 5
 
 topics = {}
 qrels = {}
@@ -101,7 +106,7 @@ class InvertedIndex:
             q = QueryParser("p", ix.schema, group=OrGroup).parse(string)
             results = searcher.search(q, limit=k)
             for r in results:
-                id_list.append((r['id'], r.score))
+                id_list.append((r['id'],r.score))
         return id_list
 
     def get_term_idf(self, term):
@@ -142,12 +147,78 @@ def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
     extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
     print(extracted_terms)
-    dot_product = numpy.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
+    dot_product = np.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
     return [doc_id for i, doc_id in enumerate(I.doc_ids) if dot_product[i] >= round(BOOLEAN_ROUND_TOLERANCE * k)]
 
 
 def ranking(q, p, I: InvertedIndex, *args):
     return I.search_index(' '.join(topics[q].values()), p)
+
+
+def calc_precision_based_measures(predicted_ids, expected_ids,nr_documents = 10, metric=None):
+
+    def precision(_predicted, _expected):
+        return len(set(_predicted).intersection(set(_expected))) / len(_predicted)
+
+    def recall(_predicted, _expected):
+        return len(set(_predicted).intersection(set(_expected))) / len(_expected)
+
+    def f1(_predicted, _expected):
+        pre, rec = precision(_predicted, _expected), recall(_predicted, _expected)
+        return 0.0 if pre == rec == 0 else 2 * pre * rec / (pre + rec)
+
+    def map(_predicted, _expected):
+        pre, rec = precision(_predicted, _expected), recall(_predicted, _expected)
+        return 0.0 if pre == rec == 0 else ml_metrics.mapk([_expected], [_predicted], nr_documents)
+
+    metrics = {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'map': map,
+    }
+
+    if metric is None:
+        metric = metrics.keys()
+    return {measure: metrics[measure]([int(i) for i in predicted_ids],[int(i) for i in expected_ids]) for measure in metric}
+
+
+''' Code Adapted from https://gist.github.com/bwhite/3726239'''
+def calc_gain_based_measures(scores,nr_documents = 10, metric=None):
+
+    def dcg(scores, k):
+        r = np.asfarray(scores)[:k]
+        if r.size:
+            return r[0] + np.sum(r[1:] / np.log2(np.arange(2, r.size + 1)))
+        return 0
+
+    def ndcg(scores,k):
+        dcg_max = dcg(sorted(scores, reverse=True), k)
+        if not dcg_max:
+            return 0.
+        return dcg(scores, k) / dcg_max
+
+    metrics = {
+        'dcg':dcg,
+        'ndcg': ndcg
+    }
+
+    if metric is None:
+
+        metric = metrics.keys()
+    return {measure: metrics[measure](scores,nr_documents) for measure in
+            metric}
+
+
+def MRR(predicted,expected,metric = None):
+    MRR = 0
+    for qid in predicted:
+        for i in range(0,NR_DOCUMENTS):
+            if qid in expected:
+                    MRR += 1 / (i + 1)
+    MRR = MRR / len(predicted)
+
+    return {'MRR': MRR}
 
 
 def parse_xml_doc(filename):
@@ -204,6 +275,7 @@ def parse_qrels(filename):
     return dict(parsed_qrels), labeled_list
 
 
+
 def main():
     global topics
     if os.path.isdir(f'{COLLECTION_PATH}{DATASET}'):
@@ -235,13 +307,22 @@ def main():
     qrels, labeled_docs = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
     for q in topics:
+        print("Topic:", q)
         # print('Topic:', topics[q], sep='\n')
         # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
         # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
-        # print(sorted(doc_ids), sorted(qrels[q]), '\n', sep='\n')
-        print(ranking(q, 30, I))
+
+        doc_ids = ranking(q, NR_DOCUMENTS, I)
+        print("Predicted:", sorted(doc_ids),
+              "Expected:", sorted(qrels[q]),
+              "Precision Measures:", calc_precision_based_measures(sorted([ids[0] for ids in doc_ids]), sorted(qrels[q]),nr_documents=NR_DOCUMENTS),
+              "Gain Measures:", calc_gain_based_measures(sorted([scores[1] for scores in doc_ids]),nr_documents=NR_DOCUMENTS),
+               MRR(sorted([int(ids[0]) for ids in doc_ids]),sorted(int(expected) for expected in qrels[q])),'\n', sep='\n')
+
+
     return 0
+
 
 
 if __name__ == '__main__':
