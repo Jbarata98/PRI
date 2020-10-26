@@ -17,7 +17,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import precision_recall_curve
 from ir_evaluation.effectiveness import effectiveness
 
-
 import ml_metrics
 from pympler import asizeof
 from itertools import groupby
@@ -29,10 +28,10 @@ from whoosh import index
 from whoosh.fields import *
 from whoosh.qparser import *
 from whoosh.analysis import *
+import math
 
 nltk.download('wordnet')
-ir = effectiveness() # --> an object, which we can use all methods in it, is created
-
+ir = effectiveness()  # --> an object, which we can use all methods in it, is created
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -58,7 +57,8 @@ non_relevant_index = {}
 non_relevant = []
 
 
-def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str, show_points=False, xpercentage=False, ypercentage=False):
+def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str,
+                        show_points=False, xpercentage=False, ypercentage=False):
     legend: list = []
     ax.set_title(title)
     ax.set_xlabel(xlabel)
@@ -105,14 +105,16 @@ class InvertedIndex:
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
-        return [' '.join(list(doc.values())) for doc in doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
+        return [' '.join(list(doc.values())) for doc in
+                doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
 
     @staticmethod
     def _save_index(D):
         if not os.path.exists("whoosh"):
             os.mkdir("whoosh")
         analyzer = StemmingAnalyzer()
-        schema = Schema(id=ID(stored=True, unique=True), **{tag: TEXT(phrase=False, analyzer=analyzer) for tag in AVAILABLE_DATA})  # Schema
+        schema = Schema(id=ID(stored=True, unique=True),
+                        **{tag: TEXT(phrase=False, analyzer=analyzer) for tag in AVAILABLE_DATA})  # Schema
         ix = index.create_in("whoosh", schema)
         writer = ix.writer()
         for doc_id, doc in tqdm(D.items(), desc=f'{"INDEXING WHOOSH":20}'):
@@ -213,7 +215,8 @@ def calc_precision_based_measures(predicted_ids, expected_ids, nr_documents=10, 
 
     if metric is None:
         metric = metrics.keys()
-    return {measure: metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids]) for measure in metric}
+    return {measure: metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids]) for measure in
+            metric}
 
 
 def precision_recall_generator(predicted, expected):
@@ -224,28 +227,34 @@ def precision_recall_generator(predicted, expected):
         yield tp / (i + 1), tp / max(1, len(expected))
 
 
-''' Code Adapted from https://gist.github.com/bwhite/3726239'''
-def calc_gain_based_measures(scores, nr_documents=10, metric=None): #isto n deve tar bem
-    def dcg(scores, k):
-        r = np.asfarray(scores)[:k]
-        if r.size:
-            return r[0] + np.sum(r[1:] / np.log2(np.arange(2, r.size + 1)))
-        return 0
+def calc_gain_based_measures(predicted, expected, k_values = [5,10,15,20], metric=None):  # isto n deve tar bem
+    def dcg(predicted, expected, k):
+        sum_dcg, sum_ndcg = 0, 0
+        binary_relevance, dcg, optimal_dcg, ndcg = [], [], [], []
+        for i, id in enumerate(predicted):
+            if id in expected:
+                sum_dcg += 1 / math.log(i + 2, 2)
+                binary_relevance.append(1)
+            else:
+                binary_relevance.append(0)
+            if i in k_values:
+                dcg.append(sum_dcg)
 
-    def ndcg(scores, k):
-        dcg_max = dcg(sorted(scores, reverse=True), k)
-        if not dcg_max:
-            return 0.
-        return dcg(scores, k) / dcg_max
+        for j, value in enumerate(sorted(binary_relevance, reverse=True)):
+            sum_ndcg += value / math.log(j + 2, 2)
+            if j in k_values:
+                optimal_dcg.append(sum_ndcg)
+        ndcg = [dcg[k] / optimal_dcg[k] for k in range(len(k_values))]
+        return ndcg
 
     metrics = {
-        'dcg': dcg,
-        'ndcg': ndcg #??
+        'nDCG': dcg,
     }
 
     if metric is None:
         metric = metrics.keys()
-    return {measure: metrics[measure](scores, nr_documents) for measure in
+
+    return {measure: metrics[measure](predicted, expected, k_values) for measure in
             metric}
 
 
@@ -258,40 +267,37 @@ def MRR(predicted, expected):
     return {'MRR': MRR}
 
 
-
-def BPREF(predicted,relevant,non_relevant):
-
-    relevant_answers,non_relevant_answers = set(predicted).intersection(set(relevant)),set(predicted).intersection(set(non_relevant))
+def BPREF(predicted, relevant, non_relevant):
+    relevant_answers, non_relevant_answers = set(predicted).intersection(set(relevant)), set(predicted).intersection(
+        set(non_relevant))
     counter = 0
     Bpref = 0
     sum = 0
     if len(relevant_answers) == 0:
         return Bpref
-    if len(non_relevant_answers) == 0: #idk
-        Bpref = 1/len(relevant_answers) + 1
+    if len(non_relevant_answers) == 0:  # idk
+        Bpref = 1 / len(relevant_answers) + 1
         return Bpref
     else:
         for rel in relevant_answers:
             for pred in predicted:
                 if pred in non_relevant_answers:
-                    counter+=1
+                    counter += 1
                 elif pred is rel:
-                    sum +=(1-(counter/min(len(relevant_answers),len(non_relevant_answers))))
+                    sum += (1 - (counter / min(len(relevant_answers), len(non_relevant_answers))))
                     counter = 0
-        Bpref = 1/len(relevant_answers) + sum
+                    continue
+        Bpref = 1 / len(relevant_answers) + sum
 
         return {'BPREF': Bpref}
-
 
 
 def parse_xml_doc(filename):
     parsed_doc = {}
     with open(filename, encoding='ISO-8859-1') as f:
         soup = BeautifulSoup(f.read().strip(), 'lxml')
-
         for tag in AVAILABLE_DATA:
             parsed_doc[tag] = ''.join([str(e.string) for e in soup.find_all(tag)])
-
         return {soup.find(DATA_HEADER[0])[DATA_HEADER[1]]: parsed_doc}
 
 
@@ -322,13 +328,15 @@ def tqdm_generator(members, n):
 def read_documents(dirs, sample_size=None):
     docs = {}
     for directory in tqdm(dirs, desc=f'{"PARSING DATASET":20}'):
-        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:sample_size], desc=f'{f"  DIR[{directory}]":20}', leave=False):
+        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:sample_size],
+                              desc=f'{f"  DIR[{directory}]":20}', leave=False):
             docs.update(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
     return docs
 
 
 def parse_qrels(filename):
-    topic_index, doc_index,non_relevant_index,non_relevant = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
+    topic_index, doc_index, non_relevant_index, non_relevant = defaultdict(list), defaultdict(list), defaultdict(
+        list), defaultdict(list)
     with open(filename, encoding='utf8') as f:
         for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
             q_id, doc_id, relevance = line.split()
@@ -339,7 +347,7 @@ def parse_qrels(filename):
                 non_relevant_index[q_id].append(doc_id)
                 non_relevant[doc_id].append(q_id)
 
-    return dict(topic_index), dict(doc_index),dict(non_relevant_index), dict(non_relevant)
+    return dict(topic_index), dict(doc_index), dict(non_relevant_index), dict(non_relevant)
 
 
 def get_subset(adict, subset):
@@ -347,14 +355,14 @@ def get_subset(adict, subset):
 
 
 def main():
-    global topics, topic_index, doc_index,non_relevant_index,non_relevant
+    global topics, topic_index, doc_index, non_relevant_index, non_relevant
 
     # EXTRACTION
     extract_dataset()
 
     # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
-    topic_index, doc_index,non_relevant_index,non_relevant= parse_qrels(f"{COLLECTION_PATH}{QRELS}")
+    topic_index, doc_index, non_relevant_index, non_relevant = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
     # </Build Q>
 
     # <Dataset processing>
@@ -381,7 +389,7 @@ def main():
     sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
     doc_index = get_subset(doc_index, sampled_doc_ids)
     non_relevant = get_subset(non_relevant, sampled_doc_ids)
-    topic_index, non_relevant_index  = defaultdict(list), defaultdict(list)
+    topic_index, non_relevant_index = defaultdict(list), defaultdict(list)
 
     topic_index = invert_index(doc_index)
     non_relevant_index = invert_index(non_relevant)
@@ -402,7 +410,7 @@ def main():
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
         pass
 
-    # old_ranking(I, topic_index, topics)
+    #old_ranking(I, topic_index, topics)
     precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
     for q in tqdm(topics, desc=f'{f"RANKING":20}'):
         retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
@@ -454,7 +462,18 @@ def main():
     X, Y = {}, {}
     X[''], Y[''] = zip(*(iap.items()))
     X[''] = [float(val) for val in X['']]
-    multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision', False, True, True)
+    multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision',
+                        False, True, True)
+    plt.show()
+
+
+    print("Normalized Discount Gain Measure:")
+    print("nDCG:")
+    ndcg = calc_gain_based_measures(retrieved_doc_ids, topic_index[q],k_values=list(range(1,len(retrieved_doc_ids))))
+    print(ndcg)
+    multiple_line_chart(plt.gca(),list(range(1,len(retrieved_doc_ids))) ,ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg'
+                        )
+
     plt.show()
     return 0
 
@@ -473,21 +492,23 @@ def old_ranking(I, topic_index, topics):
         doc_ids = ranking(q, 500, I)
         print("Predicted:", sorted(doc_ids),
               "Expected:", sorted(topic_index[q]),
-              "Precision Measures:", calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
-              "Gain Measures:", calc_gain_based_measures([scores[1] for scores in doc_ids], nr_documents=MaxMRRRank),
-              "MRR:", MRR([ids[0] for ids in doc_ids],topic_index[q]),
-              "BPREF:" , BPREF([ids[0] for ids in doc_ids],topic_index[q],non_relevant_index[q]),
+              "Precision Measures:",
+              calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
+
+              "MRR:", MRR([ids[0] for ids in doc_ids], topic_index[q]),
+              #"BPREF:", BPREF([ids[0] for ids in doc_ids], topic_index[q], non_relevant_index[q]),
               '\n', sep='\n')
-        pr = precision_recall_generator([ids[0] for ids in doc_ids], topic_index[q])
+        pr = precision_recall_generator([ids[0] for ids in doc_index], topic_index[q])
         Y[q], X[q] = zip(*[[p, r] for (p, r) in pr])
-        #if len(Y) == 5:
+        # if len(Y) == 5:
         #    multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
         #    Y = {}
-        #plt.show()
+        # plt.show()
 
 
 def parse_dataset():
-    train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3], lambda x: x == TRAIN_DATE_SPLIT) if not key]
+    train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3],
+                                                                   lambda x: x == TRAIN_DATE_SPLIT) if not key]
     train_dirs.append(TRAIN_DATE_SPLIT)
     docs = read_documents(test_dirs[:], sample_size=None)
 
