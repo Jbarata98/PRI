@@ -8,6 +8,7 @@ import nltk
 import string
 import random
 import matplotlib.pyplot as plt
+import pandas as pd
 from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
 
 from collections import defaultdict
@@ -29,6 +30,7 @@ from whoosh.fields import *
 from whoosh.qparser import *
 from whoosh.analysis import *
 import math
+import whoosh.scoring
 
 nltk.download('wordnet')
 ir = effectiveness()  # --> an object, which we can use all methods in it, is created
@@ -49,12 +51,21 @@ OVERRIDE_SUBSET_JSON = False
 USE_ONLY_EVAL = True
 MaxMRRRank = 10
 EVAL_SAMPLE_SIZE = 3000
+BETA = 0.5
+K1_TEST_VALS = np.arange(0, 4.1, 0.5)
+B_TEST_VALS = np.arange(0, 1.1, 0.2)
+DEFAULT_P = 1000
+K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
 
 topics = {}
 topic_index = {}
 doc_index = []
 non_relevant_index = {}
 non_relevant = []
+
+def rprint(x, *args, **pargs):
+    print(x, *args, **pargs)
+    return x
 
 
 def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str,
@@ -102,6 +113,7 @@ class InvertedIndex:
         # self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
         # self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
         self._save_index(self.test)
+        self.scoring = whoosh.scoring.BM25F()
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
@@ -122,6 +134,14 @@ class InvertedIndex:
         writer.commit()
 
     @property
+    def scoring(self):
+        return self.__scoring
+
+    @scoring.setter
+    def scoring(self, new_scoring):
+        self.__scoring = new_scoring
+
+    @property
     def idf(self):
         return self.tfidf_index.idf_
 
@@ -136,7 +156,7 @@ class InvertedIndex:
     def search_index(self, string, k=10):
         id_list = []
         ix = index.open_dir("whoosh")
-        with ix.searcher() as searcher:
+        with ix.searcher(weighting=self.__scoring) as searcher:
             q = MultifieldParser(AVAILABLE_DATA, ix.schema, group=OrGroup)
             q.remove_plugin_class(PhrasePlugin)
             q = q.parse(string)
@@ -144,6 +164,7 @@ class InvertedIndex:
             for r in results:
                 id_list.append((r['id'], r.score))
         return id_list
+
 
     def get_term_idf(self, term):
         return 0 if term not in self.vocabulary else self.idf[self.vocabulary[term]]
@@ -191,32 +212,40 @@ def ranking(q, p, I: InvertedIndex, *args):
     return I.search_index(' '.join(topics[q].values()), p)
 
 
-def calc_precision_based_measures(predicted_ids, expected_ids, nr_documents=10, metric=None):
-    def precision(_predicted, _expected):
-        return len(set(_predicted).intersection(set(_expected))) / len(_predicted)
+def calc_precision_based_measures(predicted_ids, expected_ids, ks=(10,), metric=None):
+    def precision(_predicted, _expected, k):
+        return len(set(_predicted[:k]).intersection(set(_expected))) / len(_predicted[:k])
 
-    def recall(_predicted, _expected):
-        return len(set(_predicted).intersection(set(_expected))) / len(_expected)
+    def recall(_predicted, _expected, k):
+        return len(set(_predicted[:k]).intersection(set(_expected))) / len(_expected)
 
-    def f1(_predicted, _expected):
-        pre, rec = precision(_predicted, _expected), recall(_predicted, _expected)
+    def fbeta(_predicted, _expected, k):
+        pre, rec = precision(_predicted, _expected, k), BETA * recall(_predicted, _expected, k)
         return 0.0 if pre == rec == 0 else 2 * pre * rec / (pre + rec)
 
-    def map(_predicted, _expected):
-        pre, rec = precision(_predicted, _expected), recall(_predicted, _expected)
-        return 0.0 if pre == rec == 0 else ml_metrics.mapk([_expected], [_predicted], nr_documents)
+    def map(_predicted, _expected, k):
+        return ml_metrics.mapk([_expected], [_predicted], k)
+
+    def MRR(predicted, expected, k):
+        MRR = 0
+        for i, qid in zip(range(k), predicted):
+            if qid in expected:
+                MRR = 1 / (i + 1)
+                break
+        return MRR
 
     metrics = {
         'precision': precision,
         'recall': recall,
-        'f1': f1,
+        'fbeta': fbeta,
         'map': map,
+        'mrr': MRR,
     }
 
     if metric is None:
         metric = metrics.keys()
-    return {measure: metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids]) for measure in
-            metric}
+
+    return {f'{measure}@{k}': metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids], k) for k in ks for measure in metric}
 
 
 def precision_recall_generator(predicted, expected):
@@ -267,9 +296,9 @@ def MRR(predicted, expected):
     return {'MRR': MRR}
 
 
-def BPREF(predicted, relevant, non_relevant):
-    relevant_answers, non_relevant_answers = set(predicted).intersection(set(relevant)), set(predicted).intersection(
-        set(non_relevant))
+
+def BPREF(predicted,relevant,non_relevant):
+    relevant_answers,non_relevant_answers = set(predicted).intersection(set(relevant)),set(predicted).intersection(set(non_relevant))
     counter = 0
     Bpref = 0
     sum = 0
@@ -363,12 +392,13 @@ def main():
     # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     topic_index, doc_index, non_relevant_index, non_relevant = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
+
     # </Build Q>
 
     # <Dataset processing>
     if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_sub.json'):
         print(f"{DATASET}_sub.json found, loading it...")
-        docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}.json', encoding='ISO-8859-1').read())
+        docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}_sub.json', encoding='ISO-8859-1').read())
     else:
         print(f"Loading full dataset...")
         if not OVERRIDE_SAVED_JSON and os.path.isfile(f'{COLLECTION_PATH}{DATASET}.json'):
@@ -386,14 +416,13 @@ def main():
     # </Dataset processing>
 
     # <Build D>
+    random.seed = 123
     sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
     doc_index = get_subset(doc_index, sampled_doc_ids)
     non_relevant = get_subset(non_relevant, sampled_doc_ids)
-    topic_index, non_relevant_index = defaultdict(list), defaultdict(list)
 
     topic_index = invert_index(doc_index)
     non_relevant_index = invert_index(non_relevant)
-
     docs = get_subset(docs, doc_index)
     # </Build D>
 
@@ -410,51 +439,40 @@ def main():
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
         pass
 
-    #old_ranking(I, topic_index, topics)
-    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
-    for q in tqdm(topics, desc=f'{f"RANKING":20}'):
-        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
-        precision_result = {
-            'total_result': len(retrieved_doc_ids),
-            'visited_documents': retrieved_doc_ids,
-            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)}
-        }
-        precision_results[q].update(precision_result)
+    # old_ranking(I, topic_index, topics)
 
+    # precision_results = rank_topics(I, topic_index)
+    # print_general_stats(I, topic_index)
+
+    tune_bm25("BM25tune_results.json", I, topic_index)
+    return 0
+
+
+def print_general_stats(precision_results, I, topic_index):
     print("Average Precision@n:")
     ap_at_n = ir.ap_at_n(precision_results, [5, 10, 15, 20, 'all'])
     print(ap_at_n)
-
     print("\n")
-
     print("R-Precision@n:")
     rprecision = ir.rprecision(precision_results, [5, 10, 15, 20, 'all'])
     print(rprecision)
-
     print("\n")
-
     print("Mean Average Precision:")
     mean_ap = ir.mean_ap(precision_results, [5, 10, 15, 20, 'all'])
     print(mean_ap)
-
     print("\n")
-
     print("F-Measure:")
     fmeasure = ir.fmeasure(precision_results, [5, 10, 15, 20, 'all'])
     print(fmeasure)
-
     print("\n")
     ########################################################################################
     # parameters -> (data, constant, boundaries)
-
     print("Geometric Mean Average Precision:")
     gmap = ir.gmap(precision_results, 0.3, [5, 10, 15, 20, 'all'])
     print(gmap)
-
     print("\n")
     ########################################################################################
     # parameters -> (data)
-
     print("Eleven Point - Interpolated Average Precision:")
     print("Recall => Precision")
     iap = ir.iap(precision_results)
@@ -469,13 +487,89 @@ def main():
 
     print("Normalized Discount Gain Measure:")
     print("nDCG:")
-    ndcg = calc_gain_based_measures(retrieved_doc_ids, topic_index[q],k_values=list(range(1,len(retrieved_doc_ids))))
+    ndcg = calc_gain_based_measures(precision_results[topics[0]]['visited_documents'], topic_index[q],k_values=list(range(1,len(retrieved_doc_ids))))
     print(ndcg)
-    multiple_line_chart(plt.gca(),list(range(1,len(retrieved_doc_ids))) ,ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg'
-                        )
+    multiple_line_chart(plt.gca(),list(range(1,len(precision_results[topics[0]]['visited_documents']))) ,ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg')
 
     plt.show()
-    return 0
+    #
+    # print("Cumulative Gain:")
+    # cgain = ir.cgain(precision_results, [5, 10, 15, 20, 'all'])
+    # print(cgain)
+    #
+    # print("\n")
+    #
+    # print("Normalized Cumulative Gain:")
+    # ncgain = ir.ncgain(precision_results, [5, 10, 15, 20])
+    # print(ncgain)
+    #
+    # print("\n")
+    #
+    # print("Discounted Cumulative Gain:")
+    # dcgain = ir.dcgain(precision_results, [5, 10, 15, 20])
+    # print(dcgain)
+    #
+    # print("\n")
+    #
+    # print("Normalized Discounted Cumulative Gain:")
+    # ndcgain = ir.ndcgain(precision_results, [5, 10, 15, 20, 'all'])
+    # print(ndcgain)
+    # parameters => (data, boundaries)
+    print("BPref:")
+    bpref = ir.bpref(precision_results, [5, 10, 15, 20, 'all'])
+    print(bpref)
+
+
+def tune_bm25(BM25tune_file, I, topic_index):
+    if os.path.isfile(f'{COLLECTION_PATH}{BM25tune_file}'):
+        results = pd.read_json(f'{COLLECTION_PATH}{BM25tune_file}', orient='split')
+    else:
+        results = None
+    results_update = defaultdict(list)
+    with tqdm(K1_TEST_VALS, desc=f'{f"TESTING k1={K1_TEST_VALS[0]:.2f}":20}') as k1_tqdm:
+        for k1 in k1_tqdm:
+            k1_tqdm.set_description(desc=f'{f"TESTING k1={k1:.2f}":20}')
+            with tqdm(B_TEST_VALS, desc=f'{f"TESTING b={B_TEST_VALS[0]:.2f}":20}', leave=False) as b_tqdm:
+                for b in b_tqdm:
+                    b_tqdm.set_description(desc=f'{f"TESTING b={b:.2f}":20}')
+                    if results is not None and not results.loc[(results['k1'] == k1) & (results['b'] == b)].empty:
+                        continue
+
+                    I.scoring = whoosh.scoring.BM25F(B=b, K1=k1)
+                    precision_results = rank_topics(I, topic_index, leave=False)
+
+                    metrics_scores = defaultdict(list)
+                    for q_id, data in precision_results.items():
+                        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'], K_TESTS).items():
+                            metrics_scores[metric].append(score)
+
+                    for metric, scores in metrics_scores.items():
+                        results_update[metric].append(np.mean(scores))
+                    results_update['k1'].append(k1)
+                    results_update['b'].append(b)
+    update_data = pd.DataFrame(data=results_update)
+    if results is None:
+        results = update_data
+    else:
+        results.append(update_data, ignore_index=True)
+    with open(f'{COLLECTION_PATH}{BM25tune_file}', 'w') as f:
+        f.write(json.dumps(json.loads(results.to_json(orient='split')), indent=4))
+
+    print(results)
+
+
+def rank_topics(I, topic_index, leave=True):
+    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
+        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
+        precision_result = {
+            'total_result': len(retrieved_doc_ids),
+            'visited_documents': retrieved_doc_ids,
+            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
+            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids)}
+        }
+        precision_results[q].update(precision_result)
+    return precision_results
 
 
 def invert_index(index):
