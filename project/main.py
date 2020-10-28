@@ -9,15 +9,14 @@ import string
 import random
 import matplotlib.pyplot as plt
 import pandas as pd
-from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
+import ml_metrics
 
+from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
 from collections import defaultdict
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import precision_recall_curve
-
-import ml_metrics
+from sklearn.model_selection import KFold
 from pympler import asizeof
 from itertools import groupby
 from bs4 import BeautifulSoup
@@ -50,18 +49,19 @@ OVERRIDE_SAVED_JSON = False
 OVERRIDE_SUBSET_JSON = False
 USE_ONLY_EVAL = True
 MaxMRRRank = 10
-EVAL_SAMPLE_SIZE = 0
 BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
 B_TEST_VALS = np.arange(0, 1.1, 0.2)
 DEFAULT_P = 1000
 K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
+FOLDS = 0
+RANDOM_STATE = 420
 
 topics = {}
 topic_index = {}
 doc_index = []
-non_relevant_index = {}
-non_relevant = []
+topic_index_n = {}
+doc_index_n = []
 
 
 class NamedAnalyzer():
@@ -101,8 +101,9 @@ def SimplePreprocessor(article):
 
 class InvertedIndex:
     def __init__(self, D, analyzer: NamedAnalyzer = None):
-        self.test = D
+        self.D_name, self.D = D
         self.analyzer = analyzer if analyzer else NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
+        self.whoosh_dir = f"whoosh/{self.D_name}_{self.analyzer}"
         # raw_text_test = self._raw_text_from_dict(self.test)
         # self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
         # self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
@@ -119,13 +120,19 @@ class InvertedIndex:
     def _save_index(self):
         if not os.path.exists("whoosh"):
             os.mkdir("whoosh")
-        schema = Schema(id=ID(stored=True, unique=True),
-                        **{tag: TEXT(phrase=False, analyzer=self.analyzer) for tag in AVAILABLE_DATA})  # Schema
-        ix = index.create_in("whoosh", schema)
-        writer = ix.writer()
-        for doc_id, doc in tqdm(self.test.items(), desc=f'{"INDEXING WHOOSH":20}'):
-            writer.update_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
-        writer.commit()
+        if not os.path.exists(self.whoosh_dir):
+            os.mkdir(self.whoosh_dir)
+        if index.exists_in(self.whoosh_dir):
+            print(f"Whoosh index found in \"{self.whoosh_dir}\"")
+        else:
+            print(f"Whoosh index not found, creating in \"{self.whoosh_dir}\"...")
+            schema = Schema(id=ID(stored=True, unique=True),
+                            **{tag: TEXT(phrase=False, analyzer=self.analyzer) for tag in AVAILABLE_DATA})  # Schema
+            ix = index.create_in(self.whoosh_dir, schema)
+            writer = ix.writer()
+            for doc_id, doc in tqdm(self.D.items(), desc=f'{"INDEXING WHOOSH":20}'):
+                writer.add_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
+            writer.commit()
 
     @property
     def scoring(self):
@@ -145,11 +152,11 @@ class InvertedIndex:
 
     @property
     def doc_ids(self):
-        return [doc_id for doc_id in self.test.keys()]
+        return [doc_id for doc_id in self.D.keys()]
 
     def search_index(self, string, k=10):
         id_list = []
-        ix = index.open_dir("whoosh")
+        ix = index.open_dir(self.whoosh_dir)
         with ix.searcher(weighting=self.__scoring) as searcher:
             q = MultifieldParser(AVAILABLE_DATA, ix.schema, group=OrGroup)
             q.remove_plugin_class(PhrasePlugin)
@@ -228,7 +235,7 @@ def ranking(q, p, I: InvertedIndex, *args):
 
 
 def parse_qrels(filename):
-    topic_index, doc_index, non_relevant_index, non_relevant = defaultdict(list), defaultdict(list), defaultdict(
+    topic_index, doc_index, topic_index_n, doc_index_n = defaultdict(list), defaultdict(list), defaultdict(
         list), defaultdict(list)
     with open(filename, encoding='utf8') as f:
         for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
@@ -237,10 +244,10 @@ def parse_qrels(filename):
                 topic_index[q_id].append(doc_id)
                 doc_index[doc_id].append(q_id)
             else:
-                non_relevant_index[q_id].append(doc_id)
-                non_relevant[doc_id].append(q_id)
+                topic_index_n[q_id].append(doc_id)
+                doc_index_n[doc_id].append(q_id)
 
-    return dict(topic_index), dict(doc_index), dict(non_relevant_index), dict(non_relevant)
+    return dict(topic_index), dict(doc_index), dict(topic_index_n), dict(doc_index_n)
 
 
 def get_subset(adict, subset):
@@ -248,21 +255,21 @@ def get_subset(adict, subset):
 
 
 def main():
-    global topics, topic_index, doc_index, non_relevant_index, non_relevant
+    global topics, topic_index, doc_index, topic_index_n, doc_index_n
 
     # EXTRACTION
     extract_dataset()
 
     # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
-    topic_index, doc_index, non_relevant_index, non_relevant = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
+    topic_index, doc_index, topic_index_n, doc_index_n = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
 
     # </Build Q>
 
     # <Dataset processing>
-    if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_sub.json'):
-        print(f"{DATASET}_sub.json found, loading it...")
-        docs = json.loads(open(f'{COLLECTION_PATH}{DATASET}_sub.json', encoding='ISO-8859-1').read())
+    if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_eval.json'):
+        print(f"{DATASET}_eval.json found, loading it...")
+        docs = ('eval', json.loads(open(f'{COLLECTION_PATH}{DATASET}_eval.json', encoding='ISO-8859-1').read()))
     else:
         print(f"Loading full dataset...")
         if not OVERRIDE_SAVED_JSON and os.path.isfile(f'{COLLECTION_PATH}{DATASET}.json'):
@@ -271,24 +278,27 @@ def main():
         else:
             print(f"{DATASET}.json not found, parsing full dataset...")
             docs = parse_dataset()
+        docs = ('full', docs)
 
         if USE_ONLY_EVAL:
-            docs = get_subset(docs, doc_index)
-            print(f"Saving eval set to {DATASET}_sub.json...")
-            with open(f'{COLLECTION_PATH}{DATASET}_sub.json', 'w', encoding='ISO-8859-1') as f:
-                f.write(json.dumps(docs, indent=4))
+            docs = ('eval', get_subset(docs[1], doc_index))
+            print(f"Saving eval set to {DATASET}_eval.json...")
+            with open(f'{COLLECTION_PATH}{DATASET}_eval.json', 'w', encoding='ISO-8859-1') as f:
+                f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
     # <Build D>
-    if EVAL_SAMPLE_SIZE:
-        random.seed = 123
-        sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
+    if FOLDS:
+        doc_ids_list = list(docs[1])
+        kf = KFold(n_splits=FOLDS, random_state=RANDOM_STATE, shuffle=True)
+        sampled_doc_ids = [doc_ids_list[i] for i in next(kf.split(doc_ids_list))[1]]
+        print(len(sampled_doc_ids))
         doc_index = get_subset(doc_index, sampled_doc_ids)
-        non_relevant = get_subset(non_relevant, sampled_doc_ids)
+        doc_index_n = get_subset(doc_index_n, sampled_doc_ids)
 
         topic_index = invert_index(doc_index)
-        non_relevant_index = invert_index(non_relevant)
-        docs = get_subset(docs, doc_index)
+        topic_index_n = invert_index(doc_index_n)
+        docs = (f"{docs[0]}_{FOLDS}", get_subset(docs[1], sampled_doc_ids))
     # </Build D>
 
     # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
@@ -306,7 +316,7 @@ def main():
 
     # old_ranking(I, topic_index, topics)
 
-    precision_results = rank_topics(I, topic_index)
+    precision_results = rank_topics(I, topic_index, topic_index_n)
     print_general_stats(precision_results, topic_index)
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
@@ -352,7 +362,7 @@ def tune_bm25(BM25tune_file, I, topic_index):
     print(results)
 
 
-def rank_topics(I, topic_index, leave=True):
+def rank_topics(I, topic_index, topic_index_n, leave=True):
     precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
     for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
         retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
@@ -360,7 +370,7 @@ def rank_topics(I, topic_index, leave=True):
             'total_result': len(retrieved_doc_ids),
             'visited_documents': retrieved_doc_ids,
             'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
-            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids)}
+            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids) if doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
         }
         precision_results[q].update(precision_result)
     return precision_results
@@ -372,29 +382,6 @@ def invert_index(index):
         for indexed_id in indexed_ids:
             inverted_index[indexed_id].append(id)
     return dict(inverted_index)
-
-
-def old_ranking(I, topic_index, topics):
-    Y, X = {}, {}
-    for q in tqdm(topics, desc=f'{f"RANKING":20}'):
-        doc_ids = ranking(q, 500, I)
-        print("Predicted:", sorted(doc_ids),
-              "Expected:", sorted(topic_index[q]),
-              "Precision Measures:",
-              calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
-
-              "MRR:", MRR([ids[0] for ids in doc_ids], topic_index[q]),
-              # "BPREF:", BPREF([ids[0] for ids in doc_ids], topic_index[q], non_relevant_index[q]),
-              '\n', sep='\n')
-        pr = precision_recall_generator([ids[0] for ids in doc_index], topic_index[q])
-        Y[q], X[q] = zip(*[[p, r] for (p, r) in pr])
-        # if len(Y) == 5:
-        #    multiple_line_chart(plt.gca(), X, Y, 'Precision-Recall Curve', 'recall', 'precision', True, True, True)
-        #    Y = {}
-        # plt.show()
-
-
-
 
 
 if __name__ == '__main__':

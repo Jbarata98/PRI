@@ -205,7 +205,6 @@ def print_general_stats(precision_results, topic_index):
     # multiple_line_chart(plt.gca(),list(range(1,len(precision_results[topic_index[1]]['visited_documents']))), ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg')
     #
     # plt.show()
-    # #
     # print("Cumulative Gain:")
     # cgain = ir.cgain(precision_results, [5, 10, 15, 20, 'all'])
     # print(cgain)
