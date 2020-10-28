@@ -16,7 +16,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import precision_recall_curve
-from ir_evaluation.effectiveness import effectiveness
 
 import ml_metrics
 from pympler import asizeof
@@ -29,11 +28,12 @@ from whoosh import index
 from whoosh.fields import *
 from whoosh.qparser import *
 from whoosh.analysis import *
+from metrics import *
+from parsers import *
 import math
 import whoosh.scoring
 
 nltk.download('wordnet')
-ir = effectiveness()  # --> an object, which we can use all methods in it, is created
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -50,7 +50,7 @@ OVERRIDE_SAVED_JSON = False
 OVERRIDE_SUBSET_JSON = False
 USE_ONLY_EVAL = True
 MaxMRRRank = 10
-EVAL_SAMPLE_SIZE = 3000
+EVAL_SAMPLE_SIZE = 0
 BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
 B_TEST_VALS = np.arange(0, 1.1, 0.2)
@@ -63,38 +63,33 @@ doc_index = []
 non_relevant_index = {}
 non_relevant = []
 
-def rprint(x, *args, **pargs):
-    print(x, *args, **pargs)
-    return x
+
+class NamedAnalyzer():
+    def __init__(self, analyzer, name):
+        self.analyzer = analyzer
+        self.name = name
+
+    def __call__(self, *args, **aargs):
+        return self.analyzer(*args, **aargs)
+
+    def process_raw_texts(self, raw_texts):
+        return [' '.join([token.text for token in self.analyzer(raw_text)]) for raw_text in raw_texts]
+
+    def __repr__(self):
+        return repr(self.analyzer)
+
+    def __str__(self):
+        return self.name
 
 
-def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, xlabel: str, ylabel: str,
-                        show_points=False, xpercentage=False, ypercentage=False):
-    legend: list = []
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    if xpercentage:
-        ax.set_xlim(0.0, 1.0)
-    if ypercentage:
-        ax.set_ylim(0.0, 1.0)
-
-    x = xvalues
-    for name, y in yvalues.items():
-        if isinstance(xvalues, dict):
-            x = xvalues[name]
-        ax.plot(x, y)
-        ax.scatter(x, y, 20, alpha=0.5)
-        legend.append(name)
-    ax.legend(legend, loc='best', fancybox=True, shadow=True, borderaxespad=0)
-
-
-class LemmaTokenizer(object):
+class LemmaFilter(Filter):
     def __init__(self):
         self.wnl = WordNetLemmatizer()
 
-    def __call__(self, articles):
-        return [self.wnl.lemmatize(t) for t in word_tokenize(articles)]
+    def __call__(self, tokens):
+        for t in tokens:
+            t.text = self.wnl.lemmatize(t.text)
+            yield t
 
 
 def SimplePreprocessor(article):
@@ -105,14 +100,15 @@ def SimplePreprocessor(article):
 
 
 class InvertedIndex:
-    def __init__(self, D, preprocessor=None, tokenizer=None):
+    def __init__(self, D, analyzer: NamedAnalyzer = None):
         self.test = D
+        self.analyzer = analyzer if analyzer else NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
         # raw_text_test = self._raw_text_from_dict(self.test)
         # self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
         # self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
         # self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
         # self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
-        self._save_index(self.test)
+        self._save_index()
         self.scoring = whoosh.scoring.BM25F()
 
     @staticmethod
@@ -120,16 +116,14 @@ class InvertedIndex:
         return [' '.join(list(doc.values())) for doc in
                 doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
 
-    @staticmethod
-    def _save_index(D):
+    def _save_index(self):
         if not os.path.exists("whoosh"):
             os.mkdir("whoosh")
-        analyzer = StemmingAnalyzer()
         schema = Schema(id=ID(stored=True, unique=True),
-                        **{tag: TEXT(phrase=False, analyzer=analyzer) for tag in AVAILABLE_DATA})  # Schema
+                        **{tag: TEXT(phrase=False, analyzer=self.analyzer) for tag in AVAILABLE_DATA})  # Schema
         ix = index.create_in("whoosh", schema)
         writer = ix.writer()
-        for doc_id, doc in tqdm(D.items(), desc=f'{"INDEXING WHOOSH":20}'):
+        for doc_id, doc in tqdm(self.test.items(), desc=f'{"INDEXING WHOOSH":20}'):
             writer.update_document(id=doc_id, **{tag: doc[tag] for tag in AVAILABLE_DATA})
         writer.commit()
 
@@ -165,7 +159,6 @@ class InvertedIndex:
                 id_list.append((r['id'], r.score))
         return id_list
 
-
     def get_term_idf(self, term):
         return 0 if term not in self.vocabulary else self.idf[self.vocabulary[term]]
 
@@ -182,11 +175,13 @@ class InvertedIndex:
         return self.tfidf_index.build_analyzer()
 
 
-def indexing(D, preprocessor=None, tokenizer=None, *args):
-    start_time = time.time()
-    # print(json.dumps(train_docs, indent=2))
-    I = InvertedIndex(D, preprocessor=preprocessor, tokenizer=tokenizer)
-    return I, time.time() - start_time, asizeof.asizeof(I)
+stem_analyzer = NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
+lemma_analyzer = NamedAnalyzer(RegexTokenizer() | LowercaseFilter() | StopFilter() | LemmaFilter(), "lemma_stopwords")
+
+
+def rprint(x, *args, **pargs):
+    print(x, *args, **pargs)
+    return x
 
 
 def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
@@ -200,6 +195,26 @@ def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
     return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 
+
+def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
+    raw_text, term_scores = ' '.join(topics[q].values()), []
+    if metric == 'tfidf':
+        scores = I.tfidf_transform([raw_text]).todense().A[0]
+        term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
+    elif metric == 'idf':
+        term_scores = {term: I.get_term_idf(term) for term in set(I.build_analyzer()(raw_text))}
+
+    return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+
+
+def indexing(D, analyzer=None, *args):
+    start_time = time.time()
+    # print(json.dumps(train_docs, indent=2))
+    I = InvertedIndex(D, analyzer=analyzer)
+    return I, time.time() - start_time, asizeof.asizeof(I)
+
+
+
 def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
     extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
@@ -210,157 +225,6 @@ def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
 
 def ranking(q, p, I: InvertedIndex, *args):
     return I.search_index(' '.join(topics[q].values()), p)
-
-
-def calc_precision_based_measures(predicted_ids, expected_ids, ks=(10,), metric=None):
-    def precision(_predicted, _expected, k):
-        return len(set(_predicted[:k]).intersection(set(_expected))) / len(_predicted[:k])
-
-    def recall(_predicted, _expected, k):
-        return len(set(_predicted[:k]).intersection(set(_expected))) / len(_expected)
-
-    def fbeta(_predicted, _expected, k):
-        pre, rec = precision(_predicted, _expected, k), BETA * recall(_predicted, _expected, k)
-        return 0.0 if pre == rec == 0 else 2 * pre * rec / (pre + rec)
-
-    def map(_predicted, _expected, k):
-        return ml_metrics.mapk([_expected], [_predicted], k)
-
-    def MRR(predicted, expected, k):
-        MRR = 0
-        for i, qid in zip(range(k), predicted):
-            if qid in expected:
-                MRR = 1 / (i + 1)
-                break
-        return MRR
-
-    metrics = {
-        'precision': precision,
-        'recall': recall,
-        'fbeta': fbeta,
-        'map': map,
-        'mrr': MRR,
-    }
-
-    if metric is None:
-        metric = metrics.keys()
-
-    return {f'{measure}@{k}': metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids], k) for k in ks for measure in metric}
-
-
-def precision_recall_generator(predicted, expected):
-    tp = 0
-    for i, id in enumerate(predicted):
-        if id in expected:
-            tp += 1
-        yield tp / (i + 1), tp / max(1, len(expected))
-
-
-def calc_gain_based_measures(predicted, expected, k_values = [5,10,15,20], metric=None):  # isto n deve tar bem
-    def dcg(predicted, expected, k):
-        sum_dcg, sum_ndcg = 0, 0
-        binary_relevance, dcg, optimal_dcg, ndcg = [], [], [], []
-        for i, id in enumerate(predicted):
-            if id in expected:
-                sum_dcg += 1 / math.log(i + 2, 2)
-                binary_relevance.append(1)
-            else:
-                binary_relevance.append(0)
-            if i in k_values:
-                dcg.append(sum_dcg)
-
-        for j, value in enumerate(sorted(binary_relevance, reverse=True)):
-            sum_ndcg += value / math.log(j + 2, 2)
-            if j in k_values:
-                optimal_dcg.append(sum_ndcg)
-        ndcg = [dcg[k] / optimal_dcg[k] for k in range(len(k_values))]
-        return ndcg
-
-    metrics = {
-        'nDCG': dcg,
-    }
-
-    if metric is None:
-        metric = metrics.keys()
-
-    return {measure: metrics[measure](predicted, expected, k_values) for measure in
-            metric}
-
-
-def MRR(predicted, expected):
-    MRR = 0
-    for i, qid in zip(range(MaxMRRRank), predicted):
-        if qid in expected:
-            MRR += 1 / (i + 1)
-            break
-    return {'MRR': MRR}
-
-
-
-def BPREF(predicted,relevant,non_relevant):
-    relevant_answers,non_relevant_answers = set(predicted).intersection(set(relevant)),set(predicted).intersection(set(non_relevant))
-    counter = 0
-    Bpref = 0
-    sum = 0
-    if len(relevant_answers) == 0:
-        return Bpref
-    if len(non_relevant_answers) == 0:  # idk
-        Bpref = 1 / len(relevant_answers) + 1
-        return Bpref
-    else:
-        for rel in relevant_answers:
-            for pred in predicted:
-                if pred in non_relevant_answers:
-                    counter += 1
-                elif pred is rel:
-                    sum += (1 - (counter / min(len(relevant_answers), len(non_relevant_answers))))
-                    counter = 0
-                    continue
-        Bpref = 1 / len(relevant_answers) + sum
-
-        return {'BPREF': Bpref}
-
-
-def parse_xml_doc(filename):
-    parsed_doc = {}
-    with open(filename, encoding='ISO-8859-1') as f:
-        soup = BeautifulSoup(f.read().strip(), 'lxml')
-        for tag in AVAILABLE_DATA:
-            parsed_doc[tag] = ''.join([str(e.string) for e in soup.find_all(tag)])
-        return {soup.find(DATA_HEADER[0])[DATA_HEADER[1]]: parsed_doc}
-
-
-def parse_topics(filename):
-    parsed_topics = {}
-    with open(filename, encoding='ISO-8859-1') as f:
-        soup = BeautifulSoup(f.read().strip(), 'lxml')
-        for topic in soup.find_all('top'):
-            parsed_topics.update(parse_topic(topic.get_text()))
-    return parsed_topics
-
-
-def parse_topic(topic):
-    topic_dict = {}
-    contents = topic.split(':')
-    id_title = list(filter(None, contents[1].split('\n')))
-    topic_dict['title'] = id_title[1].strip()
-    topic_dict['desc'] = ''.join(contents[2].split('\n')[:-1]).strip()
-    topic_dict['narr'] = ''.join(contents[-1].split('\n')).strip()
-    return {id_title[0].strip(): topic_dict}
-
-
-def tqdm_generator(members, n):
-    for member in tqdm(members, total=n):
-        yield member
-
-
-def read_documents(dirs, sample_size=None):
-    docs = {}
-    for directory in tqdm(dirs, desc=f'{"PARSING DATASET":20}'):
-        for file_name in tqdm(sorted(os.listdir(f"{COLLECTION_PATH}{DATASET}/{directory}"))[:sample_size],
-                              desc=f'{f"  DIR[{directory}]":20}', leave=False):
-            docs.update(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
-    return docs
 
 
 def parse_qrels(filename):
@@ -416,18 +280,19 @@ def main():
     # </Dataset processing>
 
     # <Build D>
-    random.seed = 123
-    sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
-    doc_index = get_subset(doc_index, sampled_doc_ids)
-    non_relevant = get_subset(non_relevant, sampled_doc_ids)
+    if EVAL_SAMPLE_SIZE:
+        random.seed = 123
+        sampled_doc_ids = random.sample(doc_index.keys(), EVAL_SAMPLE_SIZE)
+        doc_index = get_subset(doc_index, sampled_doc_ids)
+        non_relevant = get_subset(non_relevant, sampled_doc_ids)
 
-    topic_index = invert_index(doc_index)
-    non_relevant_index = invert_index(non_relevant)
-    docs = get_subset(docs, doc_index)
+        topic_index = invert_index(doc_index)
+        non_relevant_index = invert_index(non_relevant)
+        docs = get_subset(docs, doc_index)
     # </Build D>
 
     # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
-    I, indexing_time, indexing_space = indexing(docs, preprocessor=None, tokenizer=None)
+    I, indexing_time, indexing_space = indexing(docs, analyzer=stem_analyzer)
 
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
 
@@ -441,86 +306,15 @@ def main():
 
     # old_ranking(I, topic_index, topics)
 
-    # precision_results = rank_topics(I, topic_index)
-    # print_general_stats(I, topic_index)
+    precision_results = rank_topics(I, topic_index)
+    print_general_stats(precision_results, topic_index)
 
-    tune_bm25("BM25tune_results.json", I, topic_index)
+    # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
 
 
-def print_general_stats(precision_results, I, topic_index):
-    print("Average Precision@n:")
-    ap_at_n = ir.ap_at_n(precision_results, [5, 10, 15, 20, 'all'])
-    print(ap_at_n)
-    print("\n")
-    print("R-Precision@n:")
-    rprecision = ir.rprecision(precision_results, [5, 10, 15, 20, 'all'])
-    print(rprecision)
-    print("\n")
-    print("Mean Average Precision:")
-    mean_ap = ir.mean_ap(precision_results, [5, 10, 15, 20, 'all'])
-    print(mean_ap)
-    print("\n")
-    print("F-Measure:")
-    fmeasure = ir.fmeasure(precision_results, [5, 10, 15, 20, 'all'])
-    print(fmeasure)
-    print("\n")
-    ########################################################################################
-    # parameters -> (data, constant, boundaries)
-    print("Geometric Mean Average Precision:")
-    gmap = ir.gmap(precision_results, 0.3, [5, 10, 15, 20, 'all'])
-    print(gmap)
-    print("\n")
-    ########################################################################################
-    # parameters -> (data)
-    print("Eleven Point - Interpolated Average Precision:")
-    print("Recall => Precision")
-    iap = ir.iap(precision_results)
-    print(iap)
-    X, Y = {}, {}
-    X[''], Y[''] = zip(*(iap.items()))
-    X[''] = [float(val) for val in X['']]
-    multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision',
-                        False, True, True)
-    plt.show()
-
-
-    print("Normalized Discount Gain Measure:")
-    print("nDCG:")
-    ndcg = calc_gain_based_measures(precision_results[topics[0]]['visited_documents'], topic_index[q],k_values=list(range(1,len(retrieved_doc_ids))))
-    print(ndcg)
-    multiple_line_chart(plt.gca(),list(range(1,len(precision_results[topics[0]]['visited_documents']))) ,ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg')
-
-    plt.show()
-    #
-    # print("Cumulative Gain:")
-    # cgain = ir.cgain(precision_results, [5, 10, 15, 20, 'all'])
-    # print(cgain)
-    #
-    # print("\n")
-    #
-    # print("Normalized Cumulative Gain:")
-    # ncgain = ir.ncgain(precision_results, [5, 10, 15, 20])
-    # print(ncgain)
-    #
-    # print("\n")
-    #
-    # print("Discounted Cumulative Gain:")
-    # dcgain = ir.dcgain(precision_results, [5, 10, 15, 20])
-    # print(dcgain)
-    #
-    # print("\n")
-    #
-    # print("Normalized Discounted Cumulative Gain:")
-    # ndcgain = ir.ndcgain(precision_results, [5, 10, 15, 20, 'all'])
-    # print(ndcgain)
-    # parameters => (data, boundaries)
-    print("BPref:")
-    bpref = ir.bpref(precision_results, [5, 10, 15, 20, 'all'])
-    print(bpref)
-
-
 def tune_bm25(BM25tune_file, I, topic_index):
+    print(f"Tuning BM25 with {I.analyzer}...")
     if os.path.isfile(f'{COLLECTION_PATH}{BM25tune_file}'):
         results = pd.read_json(f'{COLLECTION_PATH}{BM25tune_file}', orient='split')
     else:
@@ -552,7 +346,7 @@ def tune_bm25(BM25tune_file, I, topic_index):
         results = update_data
     else:
         results.append(update_data, ignore_index=True)
-    with open(f'{COLLECTION_PATH}{BM25tune_file}', 'w') as f:
+    with open(f'{COLLECTION_PATH}{BM25tune_file}{I.analyzer}.json', 'w') as f:
         f.write(json.dumps(json.loads(results.to_json(orient='split')), indent=4))
 
     print(results)
@@ -590,7 +384,7 @@ def old_ranking(I, topic_index, topics):
               calc_precision_based_measures([ids[0] for ids in doc_ids], topic_index[q], nr_documents=MaxMRRRank),
 
               "MRR:", MRR([ids[0] for ids in doc_ids], topic_index[q]),
-              #"BPREF:", BPREF([ids[0] for ids in doc_ids], topic_index[q], non_relevant_index[q]),
+              # "BPREF:", BPREF([ids[0] for ids in doc_ids], topic_index[q], non_relevant_index[q]),
               '\n', sep='\n')
         pr = precision_recall_generator([ids[0] for ids in doc_index], topic_index[q])
         Y[q], X[q] = zip(*[[p, r] for (p, r) in pr])
@@ -600,25 +394,7 @@ def old_ranking(I, topic_index, topics):
         # plt.show()
 
 
-def parse_dataset():
-    train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3],
-                                                                   lambda x: x == TRAIN_DATE_SPLIT) if not key]
-    train_dirs.append(TRAIN_DATE_SPLIT)
-    docs = read_documents(test_dirs[:], sample_size=None)
 
-    print(f"Saving full set to {DATASET}.json...")
-    with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
-        f.write(json.dumps(docs, indent=4))
-    return docs
-
-
-def extract_dataset():
-    if os.path.isdir(f'{COLLECTION_PATH}{DATASET}'):
-        print(f'Directory "{DATASET}" already exists, no extraction needed.', flush=True)
-    else:
-        print('Directory "rcv1" not found. Extracting "rcv.tar.xz..."', flush=True)
-        with tarfile.open('collection/rcv1.tar.xz', 'r:xz') as D:
-            D.extractall('collection/', members=tqdm_generator(D, COLLECTION_LEN))
 
 
 if __name__ == '__main__':

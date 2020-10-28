@@ -3,10 +3,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import main
 
-metric = "mrr@10"
+DISCOUNT_FACTOR = [1.2, 3]
 
-plt.figure(figsize=(10,15))
-recall_view = pd.read_json(f'{main.COLLECTION_PATH}{"BM25tune_results.json"}', orient='split').pivot("k1", "b", metric)
+
+metric = "fbeta@10"
+recall_view = pd.read_json(f'{main.COLLECTION_PATH}{"BM25tune_results_stemming_stopwords.json"}', orient='split').pivot("k1", "b", metric)
+plt.figure(figsize=tuple([s // DISCOUNT_FACTOR[i] for i, s in enumerate(recall_view.shape[::-1])]))
 plot = sns.heatmap(recall_view,
             annot=True,
             xticklabels=recall_view.columns.values.round(2),
