@@ -118,7 +118,6 @@ class InvertedIndex:
         self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
         self._save_index()
         self.scoring = scoring if scoring else NamedBM25F()
-        print(self.vocabulary, len(self.vocabulary), sep='\n')
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
@@ -205,7 +204,6 @@ def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
         term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
     elif metric == 'idf':
         term_scores = {term: I.get_term_idf(term) for term in set(I.build_analyzer()(raw_text))}
-    print(term_scores)
     return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 
@@ -219,7 +217,6 @@ def indexing(D, *args, **aargs):
 def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
     extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
-    print(extracted_terms)
     dot_product = np.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
     return [doc_id for i, doc_id in enumerate(I.doc_ids) if dot_product[i] >= round(BOOLEAN_ROUND_TOLERANCE * k)]
 
@@ -281,13 +278,13 @@ def main():
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
-    evaluation(topics, docs, analyzer=stem_analyzer, scoring=NamedBM25F(K1=2, B=1))
+    evaluation(topics, docs, analyzer=stem_analyzer, scoring=NamedBM25F(K1=2, B=1), metric='tfidf')
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
 
 
-def evaluation(Q, D, analyzer=None, scoring=None):
+def evaluation(Q, D, analyzer=None, scoring=None, metric=None):
     global doc_index, doc_index_n, topic_index, topic_index_n
     # <Get fold>
     if FOLDS:
@@ -305,46 +302,70 @@ def evaluation(Q, D, analyzer=None, scoring=None):
 
     I, indexing_time, indexing_space = indexing(D, analyzer=analyzer, scoring=scoring)
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
-    for q in tqdm(Q, desc=f'{f"BOOLEAN RETRIEVAL":20}'):
-        print("Topic:", q)
-        print('Topic:', topics[q], sep='\n')
-        print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
-        doc_ids = boolean_query(q, I, k=5, metric='tfidf')
-        print("Relevant documents:", doc_ids)
-        pass
+    
+    if metric:
+        # <Get Retrieval results>
+        retrieval_results_file = f"{I.whoosh_dir.replace('whoosh', 'retrieval_results')}_{metric}.json"
+        if not os.path.exists("retrieval_results"):
+            os.mkdir("retrieval_results")
+        if os.path.isfile(retrieval_results_file):
+            print(f"Retrieval results already exist, loading from file (\"{retrieval_results_file}\")...")
+            retrieval_results = jsonpickle.decode(open(retrieval_results_file, encoding='ISO-8859-1').read())
+        else:
+            print(f"Retrieval results don't exist, retrieving with model...")
+            retrieval_results = retrieve_topics(I, topic_index, topic_index_n, metric='tfidf')
+            with open(retrieval_results_file, 'w', encoding='ISO-8859-1') as f:
+                f.write(jsonpickle.encode(retrieval_results, indent=4))
+        print(retrieval_results) #TODO Tao aqui os results barata
+        # </Get Retrieval results>
 
     # <Get Ranking results>
-    results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
+    ranking_results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
     if not os.path.exists("ranking_results"):
         os.mkdir("ranking_results")
-    if os.path.isfile(results_file):
-        print(f"Ranking results already exist, loading from file (\"{results_file}\")...")
-        precision_results = jsonpickle.decode(open(results_file, encoding='ISO-8859-1').read())
+    if os.path.isfile(ranking_results_file):
+        print(f"Ranking results already exist, loading from file (\"{ranking_results_file}\")...")
+        ranking_results = jsonpickle.decode(open(ranking_results_file, encoding='ISO-8859-1').read())
     else:
         print(f"Ranking results don't exist, ranking with model...")
-        precision_results = rank_topics(I, topic_index, topic_index_n)
-        with open(results_file, 'w', encoding='ISO-8859-1') as f:
-            f.write(jsonpickle.encode(precision_results, indent=4))
+        ranking_results = rank_topics(I, topic_index, topic_index_n)
+        with open(ranking_results_file, 'w', encoding='ISO-8859-1') as f:
+            f.write(jsonpickle.encode(ranking_results, indent=4))
     # </Get Ranking results>
 
-    print_general_stats(precision_results, topic_index)
+    print_general_stats(ranking_results, topic_index)
+
+
+def retrieve_topics(I, topic_index, topic_index_n, metric=None):
+    retrieval_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    for q in tqdm(topic_index, desc=f'{f"RETRIEVING":20}'):
+        retrieved_doc_ids = boolean_query(q, I, k=5, metric=metric)
+        retrieval_result = {
+            'total_result': len(retrieved_doc_ids),
+            'visited_documents': retrieved_doc_ids,
+            'assessed_documents': {doc_id: int(doc_id in topic_index[q]) for doc_id in retrieved_doc_ids if
+                                   doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
+        }
+        retrieval_results[q].update(retrieval_result)
+    return retrieval_results
+
 
 def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):
     if scoring:
         I.scoring = scoring
-    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
     for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
         retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
-        precision_result = {
+        ranking_result = {
             'total_result': len(retrieved_doc_ids),
             'visited_documents': retrieved_doc_ids,
             'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
             'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids) if
                                    doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
         }
-        precision_results[q].update(precision_result)
+        ranking_results[q].update(ranking_result)
 
-    return precision_results
+    return ranking_results
 
 
 def tune_bm25(BM25tune_file, I, topic_index):

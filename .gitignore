@@ -11,3 +11,4 @@ project/collection/rcv1.json
 project/whoosh/*
 project/collection/rcv1_sub.json
 project/ranking_results/*
+project/retrieval_results/*
