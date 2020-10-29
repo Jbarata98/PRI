@@ -343,7 +343,6 @@ def evaluation(Q, D, analyzer=None, scoring=None):
 
     print_general_stats(precision_results, topic_index)
 
-
 def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):
     if scoring:
         I.scoring = scoring

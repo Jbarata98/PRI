@@ -1,10 +1,11 @@
 import math
+from collections import defaultdict
+
 import matplotlib.pyplot as plt
 import ml_metrics
 import numpy as np
 
 from ir_evaluation.effectiveness import effectiveness
-
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -26,7 +27,8 @@ BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
 B_TEST_VALS = np.arange(0, 1.1, 0.2)
 DEFAULT_P = 1000
-K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
+K_TESTS = tuple([int(1.5**i) for i in range(1, 18)]) + (1000,)
+# K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
 
 ir = effectiveness()  # --> an object, which we can use all methods in it, is created
 
@@ -47,7 +49,8 @@ def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, 
         if isinstance(xvalues, dict):
             x = xvalues[name]
         ax.plot(x, y)
-        ax.scatter(x, y, 20, alpha=0.5)
+        if show_points:
+            ax.scatter(x, y, 20, alpha=0.5)
         legend.append(name)
     ax.legend(legend, loc='best', fancybox=True, shadow=True, borderaxespad=0)
 
@@ -96,7 +99,7 @@ def precision_recall_generator(predicted, expected):
         yield tp / (i + 1), tp / max(1, len(expected))
 
 
-def calc_gain_based_measures(predicted, expected, k_values = [5,10,15,20], metric=None):  # isto n deve tar bem
+def calc_gain_based_measures(predicted, expected, k_values=[5, 10, 15, 20], metric=None):  # isto n deve tar bem
     def dcg(predicted, expected, k):
         sum_dcg, sum_ndcg = 0, 0
         binary_relevance, dcg, optimal_dcg, ndcg = [], [], [], []
@@ -136,9 +139,8 @@ def MRR(predicted, expected):
     return {'MRR': MRR}
 
 
-
-def BPREF(predicted,relevant,non_relevant):
-    relevant_answers,non_relevant_answers = set(predicted).intersection(set(relevant)),set(predicted).intersection(set(non_relevant))
+def BPREF(predicted, relevant, non_relevant):
+    relevant_answers, non_relevant_answers = set(predicted).intersection(set(relevant)), set(predicted).intersection(set(non_relevant))
     counter = 0
     Bpref = 0
     sum = 0
@@ -162,41 +164,31 @@ def BPREF(predicted,relevant,non_relevant):
 
 
 def print_general_stats(precision_results, topic_index):
-    print("Average Precision@n:")
-    ap_at_n = ir.ap_at_n(precision_results, [5, 10, 15, 20, 'all'])
-    print(ap_at_n)
-    print("\n")
-    print("R-Precision@n:")
-    rprecision = ir.rprecision(precision_results, [5, 10, 15, 20, 'all'])
-    print(rprecision)
-    print("\n")
-    print("Mean Average Precision:")
-    mean_ap = ir.mean_ap(precision_results, [5, 10, 15, 20, 'all'])
-    print(mean_ap)
-    print("\n")
-    print("F-Measure:")
-    fmeasure = ir.fmeasure(precision_results, [5, 10, 15, 20, 'all'])
-    print(fmeasure)
-    print("\n")
-    ########################################################################################
-    # parameters -> (data, constant, boundaries)
-    print("Geometric Mean Average Precision:")
-    gmap = ir.gmap(precision_results, 0.3, [5, 10, 15, 20, 'all'])
-    print(gmap)
-    print("\n")
-    ########################################################################################
-    # parameters -> (data)
-    print("Eleven Point - Interpolated Average Precision:")
-    print("Recall => Precision")
+    metrics_scores, results = defaultdict(list), defaultdict(list)
+
+    for q_id, data in precision_results.items():
+        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'], K_TESTS).items():
+            metrics_scores[metric].append(score)
+
+    for metric, scores in metrics_scores.items():
+        metrics_scores[metric] = np.mean(scores)
+
+    for metric, score in metrics_scores.items():
+        results[metric.split('@')[0]].append(score)
+
+    results['BPref'] = [stats['value'] for k, stats in ir.bpref(precision_results, K_TESTS[:-1] + ('all',)).items()]
+    print(results)
+    multiple_line_chart(plt.gca(), list(K_TESTS), results, 'Metrics', 'k', 'score',
+                        False, False, True)
+    plt.show()
+
     iap = ir.iap(precision_results)
-    print(iap)
     X, Y = {}, {}
     X[''], Y[''] = zip(*(iap.items()))
     X[''] = [float(val) for val in X['']]
     multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision',
                         False, True, True)
     plt.show()
-
 
     # print("Normalized Discount Gain Measure:")
     # print("nDCG:")
@@ -227,6 +219,3 @@ def print_general_stats(precision_results, topic_index):
     # ndcgain = ir.ndcgain(precision_results, [5, 10, 15, 20, 'all'])
     # print(ndcgain)
     # parameters => (data, boundaries)
-    print("BPref:")
-    bpref = ir.bpref(precision_results, [5, 10, 15, 20, 'all'])
-    print(bpref)
