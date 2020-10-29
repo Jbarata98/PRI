@@ -3,6 +3,7 @@ import re
 import time
 import tarfile
 import json
+import jsonpickle
 import numpy as np
 import nltk
 import string
@@ -10,7 +11,9 @@ import random
 import matplotlib.pyplot as plt
 import pandas as pd
 import ml_metrics
+import whoosh.scoring
 
+from json import JSONEncoder
 from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -29,8 +32,6 @@ from whoosh.qparser import *
 from whoosh.analysis import *
 from metrics import *
 from parsers import *
-import math
-import whoosh.scoring
 
 nltk.download('wordnet')
 
@@ -62,6 +63,24 @@ topic_index = {}
 doc_index = []
 topic_index_n = {}
 doc_index_n = []
+
+
+class NamedBM25F(whoosh.scoring.BM25F):
+    def __init__(self, *args, **aargs):
+        super().__init__(*args, **aargs)
+        self.name = f"BM25_k1_{self.K1:.2f}_b_{self.B:.2f}".replace('.', ',')
+
+    def __str__(self):
+        return self.name
+
+
+class NamedTF_IDF(whoosh.scoring.TF_IDF):
+    def __init__(self, *args, **aargs):
+        super().__init__(*args, **aargs)
+        self.name = f"TF_IDF"
+
+    def __str__(self):
+        return self.name
 
 
 class NamedAnalyzer():
@@ -100,7 +119,7 @@ def SimplePreprocessor(article):
 
 
 class InvertedIndex:
-    def __init__(self, D, analyzer: NamedAnalyzer = None):
+    def __init__(self, D, analyzer: NamedAnalyzer = None, scoring=None):
         self.D_name, self.D = D
         self.analyzer = analyzer if analyzer else NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
         self.whoosh_dir = f"whoosh/{self.D_name}_{self.analyzer}"
@@ -110,7 +129,8 @@ class InvertedIndex:
         # self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
         # self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
         self._save_index()
-        self.scoring = whoosh.scoring.BM25F()
+        self.scoring = scoring if scoring else NamedBM25F()
+        print(scoring)
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
@@ -202,24 +222,11 @@ def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
     return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 
-
-def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
-    raw_text, term_scores = ' '.join(topics[q].values()), []
-    if metric == 'tfidf':
-        scores = I.tfidf_transform([raw_text]).todense().A[0]
-        term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
-    elif metric == 'idf':
-        term_scores = {term: I.get_term_idf(term) for term in set(I.build_analyzer()(raw_text))}
-
-    return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
-
-
-def indexing(D, analyzer=None, *args):
+def indexing(D, *args, **aargs):
     start_time = time.time()
     # print(json.dumps(train_docs, indent=2))
-    I = InvertedIndex(D, analyzer=analyzer)
+    I = InvertedIndex(D, *args, **aargs)
     return I, time.time() - start_time, asizeof.asizeof(I)
-
 
 
 def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
@@ -287,9 +294,17 @@ def main():
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
-    # <Build D>
+    evaluation(topics, docs, analyzer=stem_analyzer, scoring=NamedBM25F(K1=2, B=1))
+
+    # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
+    return 0
+
+
+def evaluation(Q, D, analyzer=None, scoring=None):
+    global doc_index, doc_index_n, topic_index, topic_index_n
+    # <Get fold>
     if FOLDS:
-        doc_ids_list = list(docs[1])
+        doc_ids_list = list(D[1])
         kf = KFold(n_splits=FOLDS, random_state=RANDOM_STATE, shuffle=True)
         sampled_doc_ids = [doc_ids_list[i] for i in next(kf.split(doc_ids_list))[1]]
         print(len(sampled_doc_ids))
@@ -298,29 +313,53 @@ def main():
 
         topic_index = invert_index(doc_index)
         topic_index_n = invert_index(doc_index_n)
-        docs = (f"{docs[0]}_{FOLDS}", get_subset(docs[1], sampled_doc_ids))
-    # </Build D>
+        D = (f"{D[0]}_{FOLDS}", get_subset(D[1], sampled_doc_ids))
+    # </get fold>
 
-    # I, indexing_time, indexing_space = indexing(docs, preprocessor=SimplePreprocessor, tokenizer=LemmaTokenizer())
-    I, indexing_time, indexing_space = indexing(docs, analyzer=stem_analyzer)
-
+    I, indexing_time, indexing_space = indexing(D, analyzer=analyzer, scoring=scoring)
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
-
-    for q in tqdm(topics, desc=f'{f"BOOLEAN RETRIEVAL":20}'):
+    for q in tqdm(Q, desc=f'{f"BOOLEAN RETRIEVAL":20}'):
         # print("Topic:", q)
         # print('Topic:', topics[q], sep='\n')
         # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
         # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
         # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
         pass
-
     # old_ranking(I, topic_index, topics)
 
-    precision_results = rank_topics(I, topic_index, topic_index_n)
+    # <Get Ranking results>
+    results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
+    if not os.path.exists("ranking_results"):
+        os.mkdir("ranking_results")
+    if os.path.isfile(results_file):
+        print(f"Ranking results already exist, loading from file (\"{results_file}\")...")
+        precision_results = jsonpickle.decode(open(results_file, encoding='ISO-8859-1').read())
+    else:
+        print(f"Ranking results don't exist, ranking with model...")
+        precision_results = rank_topics(I, topic_index, topic_index_n)
+        with open(results_file, 'w', encoding='ISO-8859-1') as f:
+            f.write(jsonpickle.encode(precision_results, indent=4))
+    # </Get Ranking results>
+
     print_general_stats(precision_results, topic_index)
 
-    # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
-    return 0
+
+def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):
+    if scoring:
+        I.scoring = scoring
+    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
+        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
+        precision_result = {
+            'total_result': len(retrieved_doc_ids),
+            'visited_documents': retrieved_doc_ids,
+            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
+            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids) if
+                                   doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
+        }
+        precision_results[q].update(precision_result)
+
+    return precision_results
 
 
 def tune_bm25(BM25tune_file, I, topic_index):
@@ -360,20 +399,6 @@ def tune_bm25(BM25tune_file, I, topic_index):
         f.write(json.dumps(json.loads(results.to_json(orient='split')), indent=4))
 
     print(results)
-
-
-def rank_topics(I, topic_index, topic_index_n, leave=True):
-    precision_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
-    for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
-        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
-        precision_result = {
-            'total_result': len(retrieved_doc_ids),
-            'visited_documents': retrieved_doc_ids,
-            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
-            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids) if doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
-        }
-        precision_results[q].update(precision_result)
-    return precision_results
 
 
 def invert_index(index):
