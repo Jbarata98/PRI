@@ -1,35 +1,19 @@
-import os
-import re
-import time
-import tarfile
-import json
-import jsonpickle
-import numpy as np
-import nltk
 import string
-import random
-import matplotlib.pyplot as plt
+import time
+import jsonpickle
+import nltk
 import pandas as pd
-import ml_metrics
 import whoosh.scoring
 
-from json import JSONEncoder
-from sklearn.metrics import dcg_score, ndcg_score, average_precision_score
-from collections import defaultdict
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.metrics import precision_recall_curve
-from sklearn.model_selection import KFold
-from pympler import asizeof
-from itertools import groupby
-from bs4 import BeautifulSoup
-from tqdm import tqdm
-from nltk import word_tokenize
 from nltk.stem import WordNetLemmatizer
+from pympler import asizeof
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.model_selection import KFold
 from whoosh import index
+from whoosh.analysis import *
 from whoosh.fields import *
 from whoosh.qparser import *
-from whoosh.analysis import *
+
 from metrics import *
 from parsers import *
 
