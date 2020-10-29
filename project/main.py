@@ -91,8 +91,11 @@ class NamedAnalyzer():
     def __call__(self, *args, **aargs):
         return self.analyzer(*args, **aargs)
 
+    def process_raw_text(self, raw_text):
+        return [token.text for token in self.analyzer(raw_text)]
+
     def process_raw_texts(self, raw_texts):
-        return [' '.join([token.text for token in self.analyzer(raw_text)]) for raw_text in raw_texts]
+        return [' '.join(self.process_raw_text(raw_text)) for raw_text in raw_texts]
 
     def __repr__(self):
         return repr(self.analyzer)
@@ -123,19 +126,19 @@ class InvertedIndex:
         self.D_name, self.D = D
         self.analyzer = analyzer if analyzer else NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
         self.whoosh_dir = f"whoosh/{self.D_name}_{self.analyzer}"
-        # raw_text_test = self._raw_text_from_dict(self.test)
-        # self.boolean_index = CountVectorizer(preprocessor=preprocessor, binary=True, tokenizer=tokenizer)
-        # self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
-        # self.tfidf_index = TfidfVectorizer(preprocessor=preprocessor, tokenizer=tokenizer, vocabulary=self.boolean_index.vocabulary)
-        # self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
+        raw_text_test = self.analyzer.process_raw_texts(self._raw_text_from_dict(self.D))
+        dud_analyzer = lambda x: x.split()
+        self.boolean_index = CountVectorizer(binary=True, analyzer=dud_analyzer)
+        self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
+        self.tfidf_index = TfidfVectorizer(vocabulary=self.boolean_index.vocabulary, analyzer=dud_analyzer)
+        self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
         self._save_index()
         self.scoring = scoring if scoring else NamedBM25F()
-        print(scoring)
+        print(self.vocabulary, len(self.vocabulary), sep='\n')
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
-        return [' '.join(list(doc.values())) for doc in
-                doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
+        return [' '.join(list(doc.values())) for doc in doc_dict.values()]  # Joins all docs in a single list of raw_doc strings
 
     def _save_index(self):
         if not os.path.exists("whoosh"):
@@ -199,7 +202,7 @@ class InvertedIndex:
         return self.tfidf_index.transform(raw_documents)
 
     def build_analyzer(self):
-        return self.tfidf_index.build_analyzer()
+        return lambda x: self.analyzer.process_raw_text(x)
 
 
 stem_analyzer = NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
@@ -214,11 +217,11 @@ def rprint(x, *args, **pargs):
 def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
     raw_text, term_scores = ' '.join(topics[q].values()), []
     if metric == 'tfidf':
-        scores = I.tfidf_transform([raw_text]).todense().A[0]
+        scores = I.tfidf_transform([' '.join(I.build_analyzer()(raw_text))]).todense().A[0]
         term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
     elif metric == 'idf':
         term_scores = {term: I.get_term_idf(term) for term in set(I.build_analyzer()(raw_text))}
-
+    print(term_scores)
     return sorted(term_scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 
@@ -319,13 +322,12 @@ def evaluation(Q, D, analyzer=None, scoring=None):
     I, indexing_time, indexing_space = indexing(D, analyzer=analyzer, scoring=scoring)
     print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
     for q in tqdm(Q, desc=f'{f"BOOLEAN RETRIEVAL":20}'):
-        # print("Topic:", q)
-        # print('Topic:', topics[q], sep='\n')
-        # print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
-        # doc_ids = boolean_query(q, I, k=5, metric='tfidf')
-        # print("Relevant documents:", [I.test[doc_id] for doc_id in doc_ids])
+        print("Topic:", q)
+        print('Topic:', topics[q], sep='\n')
+        print('Topic Keywords:', *extract_topic_query(q, I, k=5, metric='tfidf'), sep='\n')
+        doc_ids = boolean_query(q, I, k=5, metric='tfidf')
+        print("Relevant documents:", doc_ids)
         pass
-    # old_ranking(I, topic_index, topics)
 
     # <Get Ranking results>
     results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"

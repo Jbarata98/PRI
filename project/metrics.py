@@ -177,6 +177,7 @@ def print_general_stats(precision_results, topic_index):
         results[metric.split('@')[0]].append(score)
 
     results['BPref'] = [stats['value'] for k, stats in ir.bpref(precision_results, K_TESTS[:-1] + ('all',)).items()]
+    results['BPref'] = [x if x else results['BPref'][-1] for x in results['BPref']]
     print(results)
     multiple_line_chart(plt.gca(), list(K_TESTS), results, 'Metrics', 'k', 'score',
                         False, False, True)
