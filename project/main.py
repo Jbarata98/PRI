@@ -80,7 +80,7 @@ class NamedAnalyzer():
         return [token.text for token in self.analyzer(raw_text)]
 
     def process_raw_texts(self, raw_texts):
-        return [' '.join(self.process_raw_text(raw_text)) for raw_text in raw_texts]
+        return [' '.join(self.process_raw_text(raw_text)) for raw_text in tqdm(raw_texts, desc=f'{"PRE-PROCESSING":20}')]
 
     def __repr__(self):
         return repr(self.analyzer)
@@ -183,7 +183,7 @@ class InvertedIndex:
         return self.boolean_index.transform(raw_documents)
 
     def tfidf_transform(self, raw_documents):
-        return self.tfidf_index.transform(raw_documents)
+        return self.tfidf_index.transform([' '.join(self.build_analyzer()(raw_text)) for raw_text in raw_documents])
 
     def build_analyzer(self):
         return lambda x: self.analyzer.process_raw_text(x)
@@ -191,6 +191,7 @@ class InvertedIndex:
 
 stem_analyzer = NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
 lemma_analyzer = NamedAnalyzer(RegexTokenizer() | LowercaseFilter() | StopFilter() | LemmaFilter(), "lemma_stopwords")
+raw_analyzer = NamedAnalyzer(RegexTokenizer() | LowercaseFilter(), "no_preprocessing")
 
 
 def rprint(x, *args, **pargs):
@@ -201,7 +202,7 @@ def rprint(x, *args, **pargs):
 def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
     raw_text, term_scores = ' '.join(topics[q].values()), []
     if metric == 'tfidf':
-        scores = I.tfidf_transform([' '.join(I.build_analyzer()(raw_text))]).todense().A[0]
+        scores = I.tfidf_transform([raw_text]).todense().A[0]
         term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
     elif metric == 'idf':
         term_scores = {term: I.get_term_idf(term) for term in set(I.build_analyzer()(raw_text))}
@@ -255,7 +256,6 @@ def main():
     # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     topic_index, doc_index, topic_index_n, doc_index_n = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
-
     # </Build Q>
 
     # <Dataset processing>
@@ -279,13 +279,13 @@ def main():
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
-    evaluation(topics, docs, analyzer=stem_analyzer, scoring=NamedBM25F(K1=2, B=1), metric='tfidf')
+    evaluation(topics, docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='c')
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
 
 
-def evaluation(Q, D, analyzer=None, scoring=None, metric=None):
+def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
     global doc_index, doc_index_n, topic_index, topic_index_n
     # <Get fold>
     if FOLDS:
@@ -301,48 +301,101 @@ def evaluation(Q, D, analyzer=None, scoring=None, metric=None):
         D = (f"{D[0]}_{FOLDS}", get_subset(D[1], sampled_doc_ids))
     # </get fold>
 
-    I, indexing_time, indexing_space = indexing(D, analyzer=analyzer, scoring=scoring)
-    print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
-    
-    if metric:
-        # <Get Retrieval results>
-        retrieval_results_file = f"{I.whoosh_dir.replace('whoosh', 'retrieval_results')}_{metric}.json"
-        if not os.path.exists("retrieval_results"):
-            os.mkdir("retrieval_results")
-        if os.path.isfile(retrieval_results_file):
-            print(f"Retrieval results already exist, loading from file (\"{retrieval_results_file}\")...")
-            retrieval_results = jsonpickle.decode(open(retrieval_results_file, encoding='ISO-8859-1').read())
-        else:
-            print(f"Retrieval results don't exist, retrieving with model...")
-            retrieval_results = retrieve_topics(I, topic_index, topic_index_n, metric='tfidf')
-            with open(retrieval_results_file, 'w', encoding='ISO-8859-1') as f:
-                f.write(jsonpickle.encode(retrieval_results, indent=4))
-        #print(retrieval_results)
-        # </Get Retrieval results>
+    models_ranking_results = {}
+
+    for analyzer in analyzers:
+        print(f"\nEvaluating models with preprocessing: {analyzer}...")
+        I, indexing_time, indexing_space = indexing(D, analyzer=analyzer)
+        print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
+        for scoring in scorings:
+            print(f"\nEvaluating model with scoring: {scoring}...")
+            I.scoring = scoring
+            # a)
+            if 'a' in explore:
+                plot_a(I, Q, analyzer, metric)
+
+            if metric:
+                # <Get Retrieval results>
+                retrieval_results_file = f"{I.whoosh_dir.replace('whoosh', 'retrieval_results')}_{metric}.json"
+                if not os.path.exists("retrieval_results"):
+                    os.mkdir("retrieval_results")
+                if os.path.isfile(retrieval_results_file):
+                    print(f"Retrieval results already exist, loading from file (\"{retrieval_results_file}\")...")
+                    retrieval_results = jsonpickle.decode(open(retrieval_results_file, encoding='ISO-8859-1').read())
+                else:
+                    print(f"Retrieval results don't exist, retrieving with model...")
+                    retrieval_results = retrieve_topics(I, topic_index, topic_index_n, metric='tfidf')
+                    with open(retrieval_results_file, 'w', encoding='ISO-8859-1') as f:
+                        f.write(jsonpickle.encode(retrieval_results, indent=4))
+                # </Get Retrieval results>
+
+            # <Get Ranking results>
+            ranking_results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
+            if not os.path.exists("ranking_results"):
+                os.mkdir("ranking_results")
+            if os.path.isfile(ranking_results_file):
+                print(f"Ranking results already exist, loading from file (\"{ranking_results_file}\")...")
+                ranking_results = jsonpickle.decode(open(ranking_results_file, encoding='ISO-8859-1').read())
+            else:
+                print(f"Ranking results don't exist, ranking with model...")
+                ranking_results = rank_topics(I, topic_index, topic_index_n)
+                with open(ranking_results_file, 'w', encoding='ISO-8859-1') as f:
+                    f.write(jsonpickle.encode(ranking_results, indent=4))
+            # </Get Ranking results>
+
+            models_ranking_results[f"{analyzer} {scoring}"] = ranking_results
+
+            # c)
+            if 'c' in explore:
+                conf_matrix_vals = precision_boolean_metrics(I, retrieval_results)
+                print(conf_matrix_vals)
+
+                print_confusion_matrix(conf_matrix_vals)
+                boolean_precision_values = calculate_precision_boolean(I, retrieval_results)
+                f_beta_at_k = get_boolean_at_k(I, [2, 4, 6, 8])
+                print(f_beta_at_k)
+            # d)
+            if 'd' in explore:
+                plot_precicion_recall_for_p(ranking_results)
+
+            # e)
+            if 'e' in explore:
+                plot_tp_fp_fn_for_p(ranking_results)
+
+            # f)
+            if 'f' in explore:
+                plot_precicion_recall_for_p(ranking_results)
+
+            print_general_stats(ranking_results, topic_index)
+    # g)
+    if 'g' in explore and len(models_ranking_results) > 1:
+        print("Ranking with RFF...")
+        ranking_results = get_RRF_ranks(list(models_ranking_results.values()), topic_index, topic_index_n)
+        print_general_stats(ranking_results, topic_index)
+        models_ranking_results[f"RFF"] = ranking_results
+
+    plot_iap_for_models(models_ranking_results)
 
 
-    # <Get Ranking results>
-    ranking_results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
-    if not os.path.exists("ranking_results"):
-        os.mkdir("ranking_results")
-    if os.path.isfile(ranking_results_file):
-        print(f"Ranking results already exist, loading from file (\"{ranking_results_file}\")...")
-        ranking_results = jsonpickle.decode(open(ranking_results_file, encoding='ISO-8859-1').read())
-    else:
-        print(f"Ranking results don't exist, ranking with model...")
-        ranking_results = rank_topics(I, topic_index, topic_index_n)
-        with open(ranking_results_file, 'w', encoding='ISO-8859-1') as f:
-            f.write(jsonpickle.encode(ranking_results, indent=4))
-    # </Get Ranking results>
 
-    #print_general_stats(ranking_results, topic_index)
-    conf_matrix_vals= precision_boolean_metrics(I,retrieval_results)
-    print(conf_matrix_vals)
-
-    print_confusion_matrix(conf_matrix_vals)
-    boolean_precision_values= calculate_precision_boolean(I,retrieval_results)
-    f_beta_at_k = get_boolean_at_k(I,[2,4,6,8])
-    print(f_beta_at_k)
+def plot_a(I, Q, analyzer, metric):
+    plt.gca().set_title(f"TF-IDF scores histogram for vocabulary with {analyzer}")
+    plt.gca().set_xlabel("TF-IDF score")
+    plt.gca().set_ylabel("Number of tokens")
+    plt.hist(I.tfidf_transform([' '.join(list(I.vocabulary.keys()))]).todense().A[0], bins=100, log=2)
+    plt.show()
+    raw_terms_ocurrences = []
+    for topic in Q:
+        top_terms, _ = zip(*extract_topic_query(topic, I, k=10, metric=metric))
+        raw_terms_ocurrences += top_terms
+    terms_count = [raw_terms_ocurrences.count(word) for word in set(raw_terms_ocurrences)]
+    max_count = max(terms_count)
+    plt.gca().set_title(f"Histogram of top query token overlaps with {metric} (k=10)")
+    plt.gca().set_xlabel("number of overlaps")
+    plt.gca().set_ylabel("occurrences")
+    plt.hist(terms_count, bins=max_count, log=2)
+    plt.xticks(rotation=75)
+    plt.show()
 
 def retrieve_topics(I, topic_index, topic_index_n, k = 5, metric=None):
 
@@ -377,7 +430,33 @@ def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):
         I.scoring = scoring
     ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
     for q in tqdm(topic_index, desc=f'{f"RANKING":20}', leave=leave):
-        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, 500, I))
+        retrieved_doc_ids, retrieved_scores = zip(*ranking(q, DEFAULT_P, I))
+        ranking_result = {
+            'total_result': len(retrieved_doc_ids),
+            'visited_documents': retrieved_doc_ids,
+            'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
+            'assessed_documents': {doc_id: (rank + 1, int(doc_id in topic_index[q])) for rank, doc_id in enumerate(retrieved_doc_ids) if
+                                   doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
+        }
+        ranking_results[q].update(ranking_result)
+
+    return ranking_results
+
+
+def get_RRF_ranks(models_ranking_results, topic_index, topic_index_n):
+    rrf_scores = {}
+    for q_id in models_ranking_results[0]:
+        q_ranks = defaultdict(list)
+        for model in models_ranking_results:
+            for rank, doc_id in enumerate(model[q_id]["visited_documents"]):
+                q_ranks[doc_id].append(rank + 1)
+        for doc_id, ranks in q_ranks.items():
+            q_ranks[doc_id] = sum([1 / (50 + rank) for rank in q_ranks[doc_id]])
+        rrf_scores[q_id] = sorted(q_ranks.keys(), key=q_ranks.get, reverse=True)[:len(models_ranking_results[0][q_id]["visited_documents"])]
+
+    ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+    for q in tqdm(topic_index, desc=f'{f"RANKING":20}'):
+        retrieved_doc_ids = rrf_scores[q]
         ranking_result = {
             'total_result': len(retrieved_doc_ids),
             'visited_documents': retrieved_doc_ids,

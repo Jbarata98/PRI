@@ -31,9 +31,10 @@ BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
 B_TEST_VALS = np.arange(0, 1.1, 0.2)
 DEFAULT_P = 1000
+# K_TESTS = tuple(range(1, DEFAULT_P + 1))
 K_TESTS = tuple([int(1.5**i) for i in range(1, 18)]) + (1000,)
 # K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
-
+#
 ir = effectiveness()  # --> an object, which we can use all methods in it, is created
 
 
@@ -101,6 +102,49 @@ def precision_recall_generator(predicted, expected):
         if id in expected:
             tp += 1
         yield tp / (i + 1), tp / max(1, len(expected))
+
+
+def tp_fp_fn_generator(predicted, expected):
+    tp = 0
+    for i, id in enumerate(predicted):
+        if id in expected:
+            tp += 1
+        yield tp, i + 1 - tp, len(expected) - tp
+
+
+def plot_tp_fp_fn_for_p(ranking_results):
+    tp_fp_fn = {'true positives': defaultdict(list), 'false positives': defaultdict(list), 'false negatives': defaultdict(list)}
+
+    for q_id, data in ranking_results.items():
+        tp_fp_fn_g = tp_fp_fn_generator(data['visited_documents'], data['related_documents'])
+        for tp, fp, fn in tp_fp_fn_g:
+            tp_fp_fn['true positives'][q_id].append(tp)
+            tp_fp_fn['false positives'][q_id].append(fp)
+            tp_fp_fn['false negatives'][q_id].append(fn)
+
+    for metric, data in tp_fp_fn.items():
+        tp_fp_fn[metric] = np.mean(list(data.values()), axis=0)
+
+    multiple_line_chart(plt.gca(), list(range(1, len(list(tp_fp_fn.values())[0]) + 1)), tp_fp_fn, 'True positives, false positives and false negatives false for p', 'p', 'score',
+                        False, False, False)
+    plt.show()
+
+
+def plot_precicion_recall_for_p(ranking_results):
+    precision_recall = {'precision': defaultdict(list), 'recall': defaultdict(list)}
+
+    for q_id, data in ranking_results.items():
+        precision_recall_g = precision_recall_generator(data['visited_documents'], data['related_documents'])
+        for precision, recall in precision_recall_g:
+            precision_recall['precision'][q_id].append(precision)
+            precision_recall['recall'][q_id].append(recall)
+
+    for metric, data in precision_recall.items():
+        precision_recall[metric] = np.mean(list(data.values()), axis=0)
+
+    multiple_line_chart(plt.gca(), list(range(1, len(list(precision_recall.values())[0]) + 1)), precision_recall,'Precision and recall for p', 'p', 'score',
+                        False, False, True)
+    plt.show()
 
 
 def calc_gain_based_measures(predicted, expected, k_values=[5, 10, 15, 20], metric=None):  # isto n deve tar bem
@@ -261,40 +305,13 @@ def print_general_stats(precision_results, topic_index):
                         False, False, True)
     plt.show()
 
-    iap = ir.iap(precision_results)
-    X, Y = {}, {}
-    X[''], Y[''] = zip(*(iap.items()))
-    X[''] = [float(val) for val in X['']]
-    multiple_line_chart(plt.gca(), X, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision',
+
+def plot_iap_for_models(models_ranking_results):
+    Y = {}
+    for model, ranking_results in models_ranking_results.items():
+        iap = ir.iap(ranking_results)
+        x, Y[model] = zip(*(iap.items()))
+        x = [float(val) for val in x]
+    multiple_line_chart(plt.gca(), x, Y, 'Eleven Point - Interpolated Average Precision (IAP)', 'recall', 'precision',
                         False, True, True)
     plt.show()
-
-    # print("Normalized Discount Gain Measure:")
-    # print("nDCG:")
-    # ndcg = calc_gain_based_measures(precision_results[topic_index[1]]['visited_documents'], topic_index[1], k_values=list(range(1,len(precision_results[topic_index[1]]))))
-    # print(ndcg)
-    # multiple_line_chart(plt.gca(),list(range(1,len(precision_results[topic_index[1]]['visited_documents']))), ndcg, 'Normalized Discount Gain Measure', 'k', 'ndcg')
-    #
-    # plt.show()
-    # print("Cumulative Gain:")
-    # cgain = ir.cgain(precision_results, [5, 10, 15, 20, 'all'])
-    # print(cgain)
-    #
-    # print("\n")
-    #
-    # print("Normalized Cumulative Gain:")
-    # ncgain = ir.ncgain(precision_results, [5, 10, 15, 20])
-    # print(ncgain)
-    #
-    # print("\n")
-    #
-    # print("Discounted Cumulative Gain:")
-    # dcgain = ir.dcgain(precision_results, [5, 10, 15, 20])
-    # print(dcgain)
-    #
-    # print("\n")
-    #
-    # print("Normalized Discounted Cumulative Gain:")
-    # ndcgain = ir.ndcgain(precision_results, [5, 10, 15, 20, 'all'])
-    # print(ndcgain)
-    # parameters => (data, boundaries)
