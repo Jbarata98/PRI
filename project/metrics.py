@@ -8,7 +8,6 @@ import pandas as pd
 import seaborn as sns
 
 from ir_evaluation.effectiveness import effectiveness
-from sklearn.metrics import ConfusionMatrixDisplay
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -118,6 +117,7 @@ def plot_tp_fp_fn_for_p(ranking_results):
     for q_id, data in ranking_results.items():
         tp_fp_fn_g = tp_fp_fn_generator(data['visited_documents'], data['related_documents'])
         for tp, fp, fn in tp_fp_fn_g:
+            tp, fp, fn = np.array([tp, fp, fn]) / sum([tp, fp, fn])
             tp_fp_fn['true positives'][q_id].append(tp)
             tp_fp_fn['false positives'][q_id].append(fp)
             tp_fp_fn['false negatives'][q_id].append(fn)
@@ -164,7 +164,7 @@ def calc_gain_based_measures(predicted, expected, k_values=(5, 10, 15, 20), metr
             sum_ndcg += value / math.log(j + 2, 2)
             if (j + 1) in k_values:
                 optimal_dcg.append(sum_ndcg)
-        ndcg = [dcg[k] / optimal_dcg[k] for k in range(len(k_values))]
+        ndcg = [dcg[k] / optimal_dcg[k] if optimal_dcg[k] else 0 for k in range(len(k_values))]
         return ndcg
 
     metrics = {

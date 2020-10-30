@@ -1,0 +1,1 @@
+To be run with main.py, all files for indexing are assumed to be in a folder called "collections".

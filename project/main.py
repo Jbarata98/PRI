@@ -30,10 +30,10 @@ DATA_HEADER = ('newsitem', 'itemid')
 TOPICS = "topics.txt"
 TOPICS_CONTENT = ('num', 'title', 'desc', 'narr')
 DEFAULT_K = 5
-BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
+BOOLEAN_ROUND_TOLERANCE = 1 - 0.2   
 OVERRIDE_SAVED_JSON = False
 OVERRIDE_SUBSET_JSON = False
-USE_ONLY_EVAL = False
+USE_ONLY_EVAL = True
 MaxMRRRank = 10
 BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
@@ -279,7 +279,7 @@ def main():
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
-    evaluation(topics, docs, analyzers=(stem_analyzer,), scorings=(NamedBM25F(K1=2, B=1),), metric='tfidf', explore='abcdefg')
+    evaluation(topics, docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='abcdefg')
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
@@ -292,7 +292,6 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
         doc_ids_list = list(D[1])
         kf = KFold(n_splits=FOLDS, random_state=RANDOM_STATE, shuffle=True)
         sampled_doc_ids = [doc_ids_list[i] for i in next(kf.split(doc_ids_list))[1]]
-        print(len(sampled_doc_ids))
         doc_index = get_subset(doc_index, sampled_doc_ids)
         doc_index_n = get_subset(doc_index_n, sampled_doc_ids)
 
@@ -350,12 +349,9 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
             # c)
             if 'c' in explore:
                 conf_matrix_vals = precision_boolean_metrics(I, retrieval_results)
-                print(conf_matrix_vals)
-
                 print_confusion_matrix(conf_matrix_vals)
                 boolean_precision_values = calculate_precision_boolean(I, retrieval_results)
                 f_beta_at_k = get_boolean_at_k(I, [2, 4, 6, 8])
-                print(f_beta_at_k)
             # d)
             if 'd' in explore:
                 plot_precicion_recall_for_p(ranking_results)
@@ -375,8 +371,7 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
         ranking_results = get_RRF_ranks(list(models_ranking_results.values()), topic_index, topic_index_n)
         print_general_stats(ranking_results)
         models_ranking_results[f"RFF"] = ranking_results
-
-    plot_iap_for_models(models_ranking_results)
+        plot_iap_for_models(models_ranking_results)
 
 
 
@@ -388,11 +383,11 @@ def plot_a(I, Q, analyzer, metric):
     plt.show()
     raw_terms_ocurrences = []
     for topic in Q:
-        top_terms, _ = zip(*extract_topic_query(topic, I, k=10, metric=metric))
+        top_terms, _ = zip(*extract_topic_query(topic, I, k=4, metric=metric))
         raw_terms_ocurrences += top_terms
     terms_count = [raw_terms_ocurrences.count(word) for word in set(raw_terms_ocurrences)]
     max_count = max(terms_count)
-    plt.gca().set_title(f"Histogram of top query token overlaps with {metric} (k=10)")
+    plt.gca().set_title(f"Histogram of top query token overlaps with {metric} (k=4)")
     plt.gca().set_xlabel("number of overlaps")
     plt.gca().set_ylabel("occurrences")
     plt.hist(terms_count, bins=max_count, log=2)
