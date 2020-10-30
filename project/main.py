@@ -33,7 +33,7 @@ DEFAULT_K = 5
 BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
 OVERRIDE_SAVED_JSON = False
 OVERRIDE_SUBSET_JSON = False
-USE_ONLY_EVAL = True
+USE_ONLY_EVAL = False
 MaxMRRRank = 10
 BETA = 0.5
 K1_TEST_VALS = np.arange(0, 4.1, 0.5)
@@ -279,7 +279,7 @@ def main():
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
 
-    evaluation(topics, docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='c')
+    evaluation(topics, docs, analyzers=(stem_analyzer,), scorings=(NamedBM25F(K1=2, B=1),), metric='tfidf', explore='abcdefg')
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
@@ -307,12 +307,14 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
         print(f"\nEvaluating models with preprocessing: {analyzer}...")
         I, indexing_time, indexing_space = indexing(D, analyzer=analyzer)
         print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
+
+        # a)
+        if 'a' in explore:
+            plot_a(I, Q, analyzer, metric)
+
         for scoring in scorings:
             print(f"\nEvaluating model with scoring: {scoring}...")
             I.scoring = scoring
-            # a)
-            if 'a' in explore:
-                plot_a(I, Q, analyzer, metric)
 
             if metric:
                 # <Get Retrieval results>
@@ -364,14 +366,14 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
 
             # f)
             if 'f' in explore:
-                plot_precicion_recall_for_p(ranking_results)
+                metrics_per_sorted_topic(ranking_results)
 
-            print_general_stats(ranking_results, topic_index)
+            print_general_stats(ranking_results)
     # g)
     if 'g' in explore and len(models_ranking_results) > 1:
         print("Ranking with RFF...")
         ranking_results = get_RRF_ranks(list(models_ranking_results.values()), topic_index, topic_index_n)
-        print_general_stats(ranking_results, topic_index)
+        print_general_stats(ranking_results)
         models_ranking_results[f"RFF"] = ranking_results
 
     plot_iap_for_models(models_ranking_results)
