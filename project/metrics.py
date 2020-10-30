@@ -4,8 +4,12 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import ml_metrics
 import numpy as np
+import pandas as pd
+import seaborn as sns
 
 from ir_evaluation.effectiveness import effectiveness
+from sklearn.metrics import ConfusionMatrixDisplay
+
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -161,6 +165,81 @@ def BPREF(predicted, relevant, non_relevant):
         Bpref = 1 / len(relevant_answers) + sum
 
         return {'BPREF': Bpref}
+
+def precision_boolean_metrics(I,retrieval_results):
+    doc_ids_total = list(I.D.keys())
+    print(len(doc_ids_total))
+    confusion_matrix_vals = defaultdict(int)
+    for q_id in retrieval_results.keys():
+        unrelated_documents = set(doc_ids_total).difference(retrieval_results[q_id]['related_documents'])
+        unvisited_documents = set(retrieval_results[q_id]['related_documents']).union(unrelated_documents)
+        confusion_matrix_vals['tp'] += len(set([ k for k,v in retrieval_results[q_id]['assessed_documents'].items() if v]))
+        confusion_matrix_vals['tn'] += len(unvisited_documents.intersection(unrelated_documents))
+        confusion_matrix_vals['fp'] += len(set(retrieval_results[q_id]['assessed_documents']).intersection(unrelated_documents))
+        confusion_matrix_vals['fn'] += len(unvisited_documents.intersection(set(retrieval_results[q_id]['related_documents'])))
+    confusion_matrix_vals['precision'], confusion_matrix_vals['recall'] , confusion_matrix_vals['f-beta']  = np.mean(confusion_matrix_vals['precision']), np.mean(confusion_matrix_vals['recall']), np.mean(confusion_matrix_vals['f-beta'])
+    return confusion_matrix_vals
+
+def bar_chart(ax: plt.Axes, xvalues: list, yvalues: list, title: str, xlabel: str, ylabel: str, percentage=False, reverse=None):
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if percentage:
+        ax.set_ylim(0.0, 1.0)
+    if reverse is not None:
+        yvalues, xvalues = zip(*sorted(zip(yvalues, xvalues), reverse=reverse))
+    ax.set_xticklabels(xvalues, rotation=90, fontsize='small')
+    ax.bar(xvalues, yvalues, edgecolor='grey')
+    plt.show()
+
+def calculate_precision_boolean(I,retrieval_results, normalized = False):
+    doc_ids_total = list(I.D.keys())
+    precision_dict = defaultdict(list)
+    for q_id in retrieval_results.keys():
+        unrelated_documents = set(doc_ids_total).difference(retrieval_results[q_id]['related_documents'])
+        unvisited_documents = set(retrieval_results[q_id]['related_documents']).union(unrelated_documents)
+        tp =len(set([k for k, v in retrieval_results[q_id]['assessed_documents'].items() if v]))
+        fp = len(set(retrieval_results[q_id]['assessed_documents']).intersection(unrelated_documents))
+        fn = len(unvisited_documents.intersection(set(retrieval_results[q_id]['related_documents'])))
+        precision = tp/(tp + fp) if tp else 0
+        recall = tp/(tp+ fn) if tp  else 0
+        precision_dict['precision'].append(0 if not tp else tp/(tp + fp))
+        precision_dict['recall'].append(0 if not tp else tp/(tp+ fn))
+
+        precision_dict['f-beta'].append(0 if precision==recall== 0 else ((1+0.5**2) * (precision * recall))/((0.5**2)*precision+recall))
+
+    if normalized:
+        precision_dict['precision'], precision_dict['recall'], precision_dict['f-beta'] = np.mean(precision_dict['precision']), np.mean(precision_dict['recall']), np.mean(precision_dict['f-beta'])
+    return precision_dict
+
+
+def print_confusion_matrix(retrieval_results):
+    total = sum(list(retrieval_results.values()))
+    cm = {tag: val/total for tag,val in retrieval_results.items()}
+    ls = ["Relevant", "Irrelevant"]
+    cm_array = np.array([[cm['tp'],cm['fp']],[cm['fn'],cm['tn']]])
+    plot_confusion_matrix(plt.gca(),cm_array,ls,title="Confusion Matrix Boolean", class_name="Label")
+    #disp = ConfusionMatrixDisplay(confusion_matrix=cm_array, display_labels=ls)
+    #disp.plot()
+    plt.show()
+
+def plot_confusion_matrix(ax, cnf_mtx, labels, title="", class_name="class"):
+    data = pd.DataFrame(cnf_mtx)
+    ax.set_title(title)
+    ax.set_xlabel(class_name)
+    ax.set_ylabel(class_name)
+    sns.heatmap(data,
+                xticklabels=labels,
+                yticklabels=labels,
+                square=True,
+                cbar=False,
+                annot=True,
+                cmap='Blues',
+                linewidths=1,
+                linecolor="black",
+                fmt='g',
+                ax=ax)
+    return
 
 
 def print_general_stats(precision_results, topic_index):

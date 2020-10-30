@@ -4,6 +4,7 @@ import jsonpickle
 import nltk
 import pandas as pd
 import whoosh.scoring
+from collections import defaultdict
 
 from nltk.stem import WordNetLemmatizer
 from pympler import asizeof
@@ -316,8 +317,9 @@ def evaluation(Q, D, analyzer=None, scoring=None, metric=None):
             retrieval_results = retrieve_topics(I, topic_index, topic_index_n, metric='tfidf')
             with open(retrieval_results_file, 'w', encoding='ISO-8859-1') as f:
                 f.write(jsonpickle.encode(retrieval_results, indent=4))
-        print(retrieval_results) #TODO Tao aqui os results barata
+        #print(retrieval_results)
         # </Get Retrieval results>
+
 
     # <Get Ranking results>
     ranking_results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
@@ -333,21 +335,41 @@ def evaluation(Q, D, analyzer=None, scoring=None, metric=None):
             f.write(jsonpickle.encode(ranking_results, indent=4))
     # </Get Ranking results>
 
-    print_general_stats(ranking_results, topic_index)
+    #print_general_stats(ranking_results, topic_index)
+    conf_matrix_vals= precision_boolean_metrics(I,retrieval_results)
+    print(conf_matrix_vals)
 
+    print_confusion_matrix(conf_matrix_vals)
+    boolean_precision_values= calculate_precision_boolean(I,retrieval_results)
+    f_beta_at_k = get_boolean_at_k(I,[2,4,6,8])
+    print(f_beta_at_k)
 
-def retrieve_topics(I, topic_index, topic_index_n, metric=None):
+def retrieve_topics(I, topic_index, topic_index_n, k = 5, metric=None):
+
     retrieval_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
+
     for q in tqdm(topic_index, desc=f'{f"RETRIEVING":20}'):
-        retrieved_doc_ids = boolean_query(q, I, k=5, metric=metric)
+        retrieved_doc_ids = boolean_query(q, I, k, metric=metric)
         retrieval_result = {
             'total_result': len(retrieved_doc_ids),
             'visited_documents': retrieved_doc_ids,
             'assessed_documents': {doc_id: int(doc_id in topic_index[q]) for doc_id in retrieved_doc_ids if
                                    doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
+
         }
         retrieval_results[q].update(retrieval_result)
     return retrieval_results
+
+def get_boolean_at_k(I,k_values):
+    k_dict = defaultdict(list)
+    for k in k_values:
+        retrieval_results_at_k = retrieve_topics(I, topic_index, topic_index_n,k, metric='tfidf')
+        boolean_precision_values = calculate_precision_boolean(I, retrieval_results_at_k)
+        k_dict[k].append(boolean_precision_values['f-beta'])
+        plt.figure(figsize=(15, 5))
+        bar_chart(plt.gca(),list(retrieval_results_at_k.keys()), k_dict[k][0], 'f beta distribution for' + ' ' + str(k) + ' ' + 'terms', "topics", "f-beta")
+    return k_dict
+
 
 
 def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):
