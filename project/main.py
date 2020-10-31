@@ -30,7 +30,7 @@ DATA_HEADER = ('newsitem', 'itemid')
 TOPICS = "topics.txt"
 TOPICS_CONTENT = ('num', 'title', 'desc', 'narr')
 DEFAULT_K = 5
-BOOLEAN_ROUND_TOLERANCE = 1 - 0.2   
+BOOLEAN_ROUND_TOLERANCE = 1 - 0.2
 OVERRIDE_SAVED_JSON = False
 OVERRIDE_SUBSET_JSON = False
 USE_ONLY_EVAL = True
@@ -45,9 +45,9 @@ RANDOM_STATE = 420
 
 topics = {}
 topic_index = {}
-doc_index = []
+doc_index = {}
 topic_index_n = {}
-doc_index_n = []
+doc_index_n = {}
 
 
 class NamedBM25F(whoosh.scoring.BM25F):
@@ -199,8 +199,10 @@ def rprint(x, *args, **pargs):
     return x
 
 
-def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', *args):
-    raw_text, term_scores = ' '.join(topics[q].values()), []
+def extract_topic_query(q, I: InvertedIndex, k=DEFAULT_K, metric='idf', _topics=None, *args):
+    if _topics is None:
+        _topics = topics
+    raw_text, term_scores = ' '.join(_topics[q].values()), []
     if metric == 'tfidf':
         scores = I.tfidf_transform([raw_text]).todense().A[0]
         term_scores = {term: scores[i] for term, i in I.vocabulary.items() if scores[i] != 0}
@@ -216,8 +218,10 @@ def indexing(D, *args, **aargs):
     return I, time.time() - start_time, asizeof.asizeof(I)
 
 
-def boolean_query(q, I: InvertedIndex, k, metric='idf', *args):
-    extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, *args)))[0])]
+def boolean_query(q, I: InvertedIndex, k, metric='idf', _topics=None, *args):
+    if _topics is None:
+        _topics = topics
+    extracted_terms = [' '.join(list(zip(*extract_topic_query(q, I, k, metric, _topics=_topics, *args)))[0])]
     topic_boolean = I.boolean_transform(extracted_terms)
     dot_product = np.dot(topic_boolean, I.boolean_test_matrix.T).A[0]
     return [doc_id for i, doc_id in enumerate(I.doc_ids) if dot_product[i] >= round(BOOLEAN_ROUND_TOLERANCE * k)]
@@ -248,18 +252,25 @@ def get_subset(adict, subset):
 
 
 def main():
+    docs, topics, topic_index, doc_index, topic_index_n, doc_index_n = setup()
+
+    evaluation(topics, (doc_index, doc_index_n), docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='')
+
+    # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
+    return 0
+
+
+def setup(use_eval=USE_ONLY_EVAL):
     global topics, topic_index, doc_index, topic_index_n, doc_index_n
 
     # EXTRACTION
     extract_dataset()
-
     # <Build Q>
     topics = parse_topics(f"{COLLECTION_PATH}{TOPICS}")
     topic_index, doc_index, topic_index_n, doc_index_n = parse_qrels(f"{COLLECTION_PATH}{QRELS}")
     # </Build Q>
-
     # <Dataset processing>
-    if USE_ONLY_EVAL and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_eval.json'):
+    if use_eval and os.path.isfile(f'{COLLECTION_PATH}{DATASET}_eval.json'):
         print(f"{DATASET}_eval.json found, loading it...")
         docs = ('eval', json.loads(open(f'{COLLECTION_PATH}{DATASET}_eval.json', encoding='ISO-8859-1').read()))
     else:
@@ -272,21 +283,19 @@ def main():
             docs = parse_dataset()
         docs = ('full', docs)
 
-        if USE_ONLY_EVAL:
+        if use_eval:
             docs = ('eval', get_subset(docs[1], doc_index))
             print(f"Saving eval set to {DATASET}_eval.json...")
             with open(f'{COLLECTION_PATH}{DATASET}_eval.json', 'w', encoding='ISO-8859-1') as f:
                 f.write(json.dumps(docs[1], indent=4))
     # </Dataset processing>
-
-    evaluation(topics, docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='abcdefg')
-
-    # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
-    return 0
+    return docs, topics, topic_index, doc_index, topic_index_n, doc_index_n
 
 
-def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
+def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=()):
     global doc_index, doc_index_n, topic_index, topic_index_n
+    doc_index, doc_index_n = R
+
     # <Get fold>
     if FOLDS:
         doc_ids_list = list(D[1])
@@ -295,10 +304,11 @@ def evaluation(Q, D, analyzers=None, scorings=(), metric=(), explore=()):
         doc_index = get_subset(doc_index, sampled_doc_ids)
         doc_index_n = get_subset(doc_index_n, sampled_doc_ids)
 
-        topic_index = invert_index(doc_index)
-        topic_index_n = invert_index(doc_index_n)
         D = (f"{D[0]}_{FOLDS}", get_subset(D[1], sampled_doc_ids))
     # </get fold>
+
+    topic_index = invert_index(doc_index)
+    topic_index_n = invert_index(doc_index_n)
 
     models_ranking_results = {}
 

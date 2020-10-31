@@ -297,6 +297,8 @@ def print_general_stats(precision_results):
     for q_id, data in precision_results.items():
         for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'], K_TESTS).items():
             metrics_scores[metric].append(score)
+        for i , score in enumerate(calc_gain_based_measures(data['visited_documents'], data['related_documents'], K_TESTS)['nDCG']):
+            metrics_scores[f'NDCG@{K_TESTS[i]}'].append(score)
 
     for metric, scores in metrics_scores.items():
         metrics_scores[metric] = np.mean(scores)
@@ -306,7 +308,6 @@ def print_general_stats(precision_results):
 
     results['BPref'] = [stats['value'] for k, stats in ir.bpref(precision_results, K_TESTS[:-1] + ('all',)).items()]
     results['BPref'] = [x if x else results['BPref'][-1] for x in results['BPref']]
-    results['nDCG'] = calc_gain_based_measures(data['visited_documents'], data['related_documents'], K_TESTS)['nDCG']
     multiple_line_chart(plt.gca(), list(K_TESTS), results, 'Metrics', 'k', 'score',
                         True, False, True)
     plt.show()
