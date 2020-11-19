@@ -231,22 +231,6 @@ def ranking(q, p, I: InvertedIndex, *args):
     return I.search_index(' '.join(topics[q].values()), p)
 
 
-def parse_qrels(filename):
-    topic_index, doc_index, topic_index_n, doc_index_n = defaultdict(list), defaultdict(list), defaultdict(
-        list), defaultdict(list)
-    with open(filename, encoding='utf8') as f:
-        for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
-            q_id, doc_id, relevance = line.split()
-            if int(relevance.replace('\n', '')):
-                topic_index[q_id].append(doc_id)
-                doc_index[doc_id].append(q_id)
-            else:
-                topic_index_n[q_id].append(doc_id)
-                doc_index_n[doc_id].append(q_id)
-
-    return dict(topic_index), dict(doc_index), dict(topic_index_n), dict(doc_index_n)
-
-
 def get_subset(adict, subset):
     return {key: adict[key] for key in subset if key in adict}
 

@@ -12,3 +12,8 @@ project/whoosh/*
 project/collection/rcv1_sub.json
 project/ranking_results/*
 project/retrieval_results/*
+*-checkpoint.ipynb
+project/collection/rcv1_eval_test.json
+project/collection/rcv1_eval_train.json
+project/collection/rcv1_test.json
+project/collection/rcv1_train.json

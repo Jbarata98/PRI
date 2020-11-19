@@ -1,14 +1,14 @@
 import json
 import os
 import tarfile
+from collections import defaultdict
+
 import numpy as np
 
 from itertools import groupby
 from tqdm import tqdm
 
-
 from bs4 import BeautifulSoup
-
 
 COLLECTION_LEN = 807168
 COLLECTION_PATH = 'collection/'
@@ -33,8 +33,6 @@ DEFAULT_P = 1000
 K_TESTS = (1, 3, 5, 10, 20, 50, 100, 200, 500, DEFAULT_P)
 
 
-
-
 def tqdm_generator(members, n):
     for member in tqdm(members, total=n):
         yield member
@@ -48,16 +46,50 @@ def read_documents(dirs, sample_size=None):
             docs.update(parse_xml_doc(f"{COLLECTION_PATH}{DATASET}/{directory}/{file_name}"))
     return docs
 
-def parse_dataset():
+
+def parse_qrels(filename):
+    topic_index, doc_index, topic_index_n, doc_index_n = defaultdict(list), defaultdict(list), defaultdict(
+        list), defaultdict(list)
+    with open(filename, encoding='utf8') as f:
+        for line in tqdm(f.readlines(), desc=f'{"READING QRELS":20}'):
+            q_id, doc_id, relevance = line.split()
+            if int(relevance.replace('\n', '')):
+                topic_index[q_id].append(doc_id)
+                doc_index[doc_id].append(q_id)
+            else:
+                topic_index_n[q_id].append(doc_id)
+                doc_index_n[doc_id].append(q_id)
+
+    return dict(topic_index), dict(doc_index), dict(topic_index_n), dict(doc_index_n)
+
+
+def parse_dataset(split="test"):
     train_dirs, test_dirs = [list(items) for key, items in groupby(sorted(os.listdir(COLLECTION_PATH + DATASET))[:-3],
                                                                    lambda x: x == TRAIN_DATE_SPLIT) if not key]
     train_dirs.append(TRAIN_DATE_SPLIT)
-    docs = read_documents(test_dirs[:], sample_size=None)
+    test_docs = train_docs = None
 
-    print(f"Saving full set to {DATASET}.json...")
-    with open(f'{COLLECTION_PATH}{DATASET}.json', 'w', encoding='ISO-8859-1') as f:
-        f.write(json.dumps(docs, indent=4))
-    return docs
+    if split != 'train':
+        test_docs = read_documents(test_dirs[:], sample_size=None)
+
+        print(f"Saving full set to {DATASET}.json...")
+        with open(f'{COLLECTION_PATH}{DATASET}_test.json', 'w', encoding='ISO-8859-1') as f:
+            f.write(json.dumps(test_docs, indent=4))
+
+        if split != 'test':
+            return test_docs
+
+    if split != 'test':
+        train_docs = read_documents(train_dirs[:], sample_size=None)
+
+        print(f"Saving full set to {DATASET}.json...")
+        with open(f'{COLLECTION_PATH}{DATASET}_train.json', 'w', encoding='ISO-8859-1') as f:
+            f.write(json.dumps(train_docs, indent=4))
+
+        if split != 'train':
+            return train_docs
+
+    return {'train': train_docs, 'test': test_docs}
 
 
 def extract_dataset():
