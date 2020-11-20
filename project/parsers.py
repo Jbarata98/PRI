@@ -76,7 +76,7 @@ def parse_dataset(split="test"):
         with open(f'{COLLECTION_PATH}{DATASET}_test.json', 'w', encoding='ISO-8859-1') as f:
             f.write(json.dumps(test_docs, indent=4))
 
-        if split != 'test':
+        if split == 'test':
             return test_docs
 
     if split != 'test':
@@ -86,7 +86,7 @@ def parse_dataset(split="test"):
         with open(f'{COLLECTION_PATH}{DATASET}_train.json', 'w', encoding='ISO-8859-1') as f:
             f.write(json.dumps(train_docs, indent=4))
 
-        if split != 'train':
+        if split == 'train':
             return train_docs
 
     return {'train': train_docs, 'test': test_docs}
