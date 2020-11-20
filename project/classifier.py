@@ -1,11 +1,14 @@
 import random
 
 from parsers import *
+from metrics import *
+
 from sklearn import metrics
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 OVERRIDE_SAVED_JSON = False
+
 
 topics = None
 docs = None
@@ -32,6 +35,10 @@ class SparseVectorClassifier:
     @property
     def idf(self):
         return self.tfidf_index.idf_
+
+    @property
+    def classes(self):
+        return self.classifier.classes_
 
     @property
     def vocabulary(self):
@@ -121,39 +128,40 @@ def training(q, Dtrain, Rtrain, **args):
 
 
 def classify(d: dict, q: str, M: SparseVectorClassifier, **args):
-    return M.predict_proba([' '.join(d.values())])[0][0]
+    return M.predict_proba([' '.join(d.values())])[0][np.where(M.classes == 1)][0]
 
+def entropy(p):
+    return 0 if p in (0,1) else -(p*math.log(p,2))+((1-p)*math.log(1-p,2))
 
 def evaluate(Qtest, Dtest, Rtest, **args):
     results, raw_results = defaultdict(dict), {}
+    metrics = defaultdict(list)
     for q in Qtest:
         model = training(q, docs['train'], Rtest)
-        for i, target in enumerate('pn'):
-            sub_test = Rtest[i].get(q, [])
-            raw_results[q] = {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, sub_test).items()}
-            labels = [round(res, 0) for res in raw_results[q].values()]
-            results[q][f'{"tf"[i]}{target}'] = labels.count(0)
-            results[q][f'{"ft"[i]}{target}'] = labels.count(1)
-        correct = results[q]['tp'] + results[q]['tn']
-        results[q]['accuracy'] = correct / (correct + results[q]['fp'] + results[q]['fn'])
-        print(results[q])
-    print(results)
+        sub_test = Rtest[0].get(q, [])
+        raw_results[q] = {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, sub_test).items()}
+        labels = [round(res, 0) for res in raw_results[q].values()]
+        results[q]['tp'] = labels.count(1)
+        results[q]['fn'] = labels.count(0)
 
-    # retrieval_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
-    #
-    # for q in tqdm(Qtest, desc=f'{f"RETRIEVING":20}'):
-    #     retrieved_doc_ids_p = {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, sub_test).items()}
-    #     retrieved_doc_ids_n = {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, sub_test).items()}
-    #     retrieved_doc_ids = boolean_query(q, I, k, metric=metric)
-    #     retrieval_result = {
-    #         'total_result': len(retrieved_doc_ids),
-    #         'visited_documents': retrieved_doc_ids,
-    #         'assessed_documents': {doc_id: int(doc_id in topic_index[q]) for doc_id in retrieved_doc_ids if
-    #                                doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
-    #
-    #     }
-    #     retrieval_results[q].update(retrieval_result)
-    # return retrieval_results
+        sub_test = Rtest[1].get(q, [])
+        raw_results[q] = {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, sub_test).items()}
+        labels = [round(res, 0) for res in raw_results[q].values()]
+        results[q]['fp'] = labels.count(1)
+        results[q]['tn'] = labels.count(0)
+
+        correct = results[q]['tp'] + results[q]['tn']
+        metrics['entropy'].append(entropy(len( Rtest[0].get(q, []))/( len(Rtest[0].get(q, []))+ len(Rtest[1].get(q, [])))))
+        metrics['accuracy'].append(correct / (correct + results[q]['fp'] + results[q]['fn']))
+        # metrics['sensitivity'].append((results[q]['tp'] / max(results[q]['tp'] + results[q]['fn'],1)))
+        # metrics['specificity'].append((results[q]['tn'] / max(results[q]['tn'] + results[q]['fp'],1)))
+        print(results[q])
+    multiple_line_chart(plt.gca(),list(Qtest.keys()),metrics,"Classification performance statistics", "Topics", "%Accuracy",show_points= True, ypercentage= True)
+    plt.show()
+
+    return dict(results), raw_results
+
+
 
 
 
