@@ -57,6 +57,7 @@ def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, 
             ax.scatter(x, y, 20, alpha=0.5)
         legend.append(name)
     ax.legend(legend, ncol=(len(legend) // 4 + 1), loc='best', fancybox=True, shadow=True, borderaxespad=0)
+    ax.set_xticklabels(xvalues, rotation=min(len(xvalues), 90), fontsize='small')
 
 
 def calc_precision_based_measures(predicted_ids, expected_ids, ks=(10,), metric=None):
