@@ -1,15 +1,17 @@
 import itertools
 import networkx as nx
+import pagerank as prank
 
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 import pandas as pd
 
+
 from metrics import *
 from parsers import *
 
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity, manhattan_distances, euclidean_distances
 
 def get_subset(adict, subset):
     return {key: adict[key] for key in subset if key in adict}
@@ -59,26 +61,48 @@ def setup():
     return docs, topics, topic_index, doc_index
 
 
-threshold = 0.01
+threshold = 0.4
 SUBSET_SIZE = 1000
+top_p = 10
 
-def compute_similarity_matrix(d):
-    tfidf_vectorizer = TfidfVectorizer(stop_words='english')
-    matrix = tfidf_vectorizer.fit_transform(value['p'] for key,value in d.items())
+def compute_similarity_matrix(d, similarity,th):
+    tfidf_vectorizer = TfidfVectorizer()
+    matrix = tfidf_vectorizer.fit_transform(' '.join(list(value.values())) for key,value in d.items())
     df = pd.DataFrame(matrix.todense(),
                       columns=tfidf_vectorizer.get_feature_names(),
                       index= d.keys())
-    return np.array(cosine_similarity(df, df))
+    sim_matrix = np.array(similarity(df,df))
+    for row in sim_matrix:
+        row[row < th] = 0  # removes edges that dont meet the threshold
+    print({'matrix shape:', sim_matrix.shape})
+    return sim_matrix
 
 
-def build_graph(d,th):
-    subset = dict(itertools.islice(d.items(),SUBSET_SIZE))
-    sim_matrix = compute_similarity_matrix(subset)
-    G = nx.from_numpy_matrix(sim_matrix)
-    G.remove_edges_from((e for e, w in nx.get_edge_attributes(G, 'weight').items() if w < th))
+def build_graph(D,sim,th):
+    D = dict(itertools.islice(D.items(),SUBSET_SIZE)) if len(D) > 1000 else D # 1000 docs subset
+    sim_matrix = compute_similarity_matrix(D,sim,th) # calculated the similarities into a matrix
+    sim_graph = nx.from_numpy_matrix(sim_matrix) # transforms into graph
+    print({'nr of edges': sim_graph.number_of_edges()})
+    sim_graph.remove_edges_from(nx.selfloop_edges(sim_graph))
 
-    nx.draw(G)
-    plt.show()
+    #print(sim_graph.edges.data())
+
+    # nx.draw(sim_graph)
+    # plt.show()
+    return sim_graph
+
+def undirected_page_rank(q,D,p,sim,th):
+    doc_ids = topic_index[0][q]
+    sim_graph = build_graph(get_subset(D,doc_ids), sim, th)
+    try:
+        pr = prank.pagerank(sim_graph, max_iter=50, weight=None)
+    except nx.PowerIterationFailedConvergence as e:
+        print(e)
+
+
+    return get_subset(pr,sorted(list(pr.keys()),key=lambda x:pr[x])[:p:-1])
+
+
 
 
 
@@ -88,7 +112,10 @@ def main():
     docs, topics, topic_index, doc_index = setup()
     for doc in docs:
         D.update(docs[doc])
-    build_graph(D,th = threshold)
+    for topic in topics:
+        print(topic)
+        pr_values = undirected_page_rank(topic, D, top_p, sim = cosine_similarity, th = threshold)
+        print({topic: pr_values})
 
 if __name__ == '__main__':
     main()
