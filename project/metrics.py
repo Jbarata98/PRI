@@ -54,10 +54,10 @@ def multiple_line_chart(ax: plt.Axes, xvalues: list, yvalues: dict, title: str, 
             x = xvalues[name]
         ax.plot(x, y)
         if show_points:
-            ax.scatter(x, y, 20, alpha=0.5)
+            ax.scatter(x, y, 15, alpha=0.5)
         legend.append(name)
     ax.legend(legend, ncol=(len(legend) // 4 + 1), loc='best', fancybox=True, shadow=True, borderaxespad=0)
-    ax.set_xticklabels(xvalues, rotation=min(len(xvalues), 90), fontsize='small')
+    ax.tick_params(axis='x', labelrotation=min(len(x), 90))
 
 
 def calc_precision_based_measures(predicted_ids, expected_ids, ks=(10,), metric=None):
@@ -314,7 +314,7 @@ def print_general_stats(precision_results):
     plt.show()
 
 
-def metrics_per_sorted_topic(precision_results):
+def metrics_per_sorted_topic(precision_results, title=None):
     metrics_scores = defaultdict(list)
     map_results = {}
 
@@ -333,7 +333,7 @@ def metrics_per_sorted_topic(precision_results):
     picked = {'BPref@10': metrics_scores['BPref'], 'MAP': metrics_scores[f'map@{DEFAULT_P}'], 'precision@10': metrics_scores[f'precision@{10}'], 'recall@10': metrics_scores[f'recall@{10}']}
 
 
-    multiple_line_chart(plt.gca(), list(range(1, len(sorted_q_ids) + 1)), picked, 'Metrics by topic, sorted by MAP score', 'k', 'score',
+    multiple_line_chart(plt.gca(), sorted_q_ids, picked, 'Metrics by topic, sorted by MAP score' + f" for {title}" if title else "", 'topic', 'score',
                         True, False, True)
     plt.show()
 

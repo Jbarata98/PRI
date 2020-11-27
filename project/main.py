@@ -238,7 +238,7 @@ def get_subset(adict, subset):
 def main():
     docs, topics, topic_index, doc_index, topic_index_n, doc_index_n = setup()
 
-    evaluation(topics, (doc_index, doc_index_n), docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='')
+    evaluation(topics, (doc_index, doc_index_n), docs, analyzers=(stem_analyzer, lemma_analyzer), scorings=(NamedBM25F(K1=2, B=1), NamedTF_IDF()), metric='tfidf', explore='g')
 
     # tune_bm25("BM25tune_results_lemma.json", I, topic_index)
     return 0
@@ -366,6 +366,8 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=()):
         print_general_stats(ranking_results)
         models_ranking_results[f"RFF"] = ranking_results
         plot_iap_for_models(models_ranking_results)
+
+    return models_ranking_results
 
 
 
