@@ -16,7 +16,6 @@ from sklearn.metrics.pairwise import cosine_similarity, manhattan_distances, euc
 
 threshold = 0.4
 SUBSET_SIZE = 1000
-top_p = 10
 
 def compute_similarity_matrix(d, similarity,th):
     tfidf_vectorizer = cl.tfidf_vectorizer
@@ -32,7 +31,7 @@ def compute_similarity_matrix(d, similarity,th):
 
 
 def build_graph(D,sim,th):
-    D = dict(itertools.islice(D.items(),SUBSET_SIZE)) if len(D) > 1000 else D # 1000 docs subset
+    D = dict(itertools.islice(D.items(),SUBSET_SIZE)) if len(D) > 1000 else D
     sim_matrix = compute_similarity_matrix(D,sim,th) # calculated the similarities into a matrix
     sim_graph = nx.from_numpy_matrix(sim_matrix) # transforms into graph
     mapping_dict = {node: doc_id for node,doc_id in zip(sim_graph.nodes,D)}
@@ -55,17 +54,34 @@ def undirected_page_rank(q,D,p,sim,th):
                  'extended_pk': pk.pagerank(sim_graph, max_iter=50, weight='weight', personalization = q['document_probabilities'])}
 
     for pr_type in pr_values:
-        results[pr_type] = cl.get_subset(pr_values[pr_type],sorted(list(pr_values[pr_type].keys()),key=lambda x:pr_values[pr_type][x])[:p:-1])
+        results[pr_type] = cl.get_subset(pr_values[pr_type],sorted(list(pr_values[pr_type].keys()),key=lambda x:pr_values[pr_type][x], reverse = True)[:p])
     return results
 
+def classify_graph(classification_results, Dtest, Qtest, Rtest, type):
+    ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in Rtest['p'].items()}
+    pk_type = 'vanilla_pk' if type == 'vanilla' else 'extended_pk'
+    with cl.tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=False) as q_tqdm:
+        for q in q_tqdm:
+            ranking_result = {
+                'unrelated_documents': classification_results[q]['unrelated_documents'],
+                'total_result': classification_results[q]['total_result'],
+                'visited_documents': classification_results[q]['visited_documents'],
+                'visited_documents_orders': classification_results[q]['visited_documents_orders'],
+                'assessed_documents': classification_results[q]['assessed_documents'],
+                'document_probabilities': undirected_page_rank(classification_results[q], D = docs['test'], p = -1, sim = cosine_similarity, th = threshold)[pk_type]
+            }
+            ranking_results[q].update(ranking_result)
+    return ranking_results
+
+
 def main():
-    D = {}
     global docs, topics, topic_index, doc_index
     docs, topics, topic_index, doc_index = cl.setup()
     classification_results = cl.get_classification_results(docs['test'],topics, topic_index, classifier = cl.knn_classifier, vectorizer = cl.tfidf_vectorizer)
     for topic in classification_results:
-        pr_values = undirected_page_rank(classification_results[topic], docs['test'], top_p, sim = cosine_similarity, th = threshold)
-        print({topic : pr_values})
-
+        pr_values = undirected_page_rank(classification_results[topic], D = docs['test'], p = 10, sim = cosine_similarity, th = threshold)
+        # print({topic : pr_values})
+    graph_results = classify_graph(classification_results, docs['test'],topics,topic_index, type = 'vanilla')
+    print(graph_results)
 if __name__ == '__main__':
     main()
