@@ -98,12 +98,7 @@ def undirected_page_rank(q,D,p,sim,th):
         pr = prank.pagerank(sim_graph, max_iter=50, weight=None)
     except nx.PowerIterationFailedConvergence as e:
         print(e)
-
-
     return get_subset(pr,sorted(list(pr.keys()),key=lambda x:pr[x])[:p:-1])
-
-
-
 
 
 def main():
