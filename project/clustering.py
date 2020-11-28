@@ -43,26 +43,33 @@ def clustering(D, approach, distance):
     df = pd.DataFrame(vector_space.todense(), index=D.keys())
     print(list(df.shape))
     X = vector_space# .toarray()    # much faster with sparse matrixes
-    if approach == 'Kmeans':
-        for nr in clusters:
+    for nr in clusters:
+        print(f"testing {approach} ... with {nr} clusters")
+
+        if approach == 'Kmeans':
             model = KMeans(n_clusters=nr, verbose=1, random_state=RANDOM_STATE, n_init=DEFAULT_N_INIT).fit(X)
-            print(f"{approach} {nr}:", next(cp))
-            cluster_labels = model.labels_
-            silhouettes.append(silhouette_score(vector_space, cluster_labels, "cosine"))
-            print("Silhouettes:", next(cp))
-            print(silhouettes)
-            distortions.append(sum(np.min(pairwise_distances(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
-            print("Distortions (sparse):", next(cp))
-            # distortions.append(sum(np.min(cdist(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
-            # print("Distortions (dense):", next(cp))
+        elif approach == 'Agglomerative':
+            model = AgglomerativeClustering(n_clusters=nr, affinity=distance, linkage="complete").fit(X.toarray())
+
+
+        # distortions.append(sum(np.min(pairwise_distances(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
+        # print("Distortions (sparse):", next(cp))
+        # distortions.append(sum(np.min(cdist(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
+        # print("Distortions (dense):", next(cp))
+
+        cluster_labels = model.labels_
+        print(f"{approach} {nr}:", next(cp))
+
+        silhouettes.append(silhouette_score(vector_space, cluster_labels, "cosine"))
+        print("Silhouettes:", next(cp))
+        print(silhouettes)
 
         # plt.plot(clusters, distortions, color='blue', label="elbow", linestyle='--') #elbow method
-
-        plt.plot(clusters, silhouettes, color='red', label="silhouette", linestyle='--')  # silhouette
-        plt.xlabel("k")
-        plt.ylabel("Silhouettes")
-        plt.title("Silhouette Scores showing the optimal k")
-        plt.show()
+    plt.plot(clusters, silhouettes, color='red', label="silhouette", linestyle='--')  # silhouette
+    plt.xlabel("k")
+    plt.ylabel("Silhouettes")
+    plt.title(f"{approach} Silhouette Scores showing the optimal k ")
+    plt.show()
 
         # silhouettesaggt.append(silhouette_score(vectorspace_topics, modelagg.labels_, metric=distance))
         # cluster = clusters[np.argmax(silhouettesaggt)]
@@ -124,7 +131,7 @@ def main():
     docs, topics, topic_index, doc_index = cl.setup()
 
     # agglomerative_clustering(docs, 'Agglomerative', 'cosine')
-    clustering(docs['train'], 'Kmeans', 'manhattan')
+    clustering(docs['train'], 'Agglomerative', 'cosine')
     # clustering(topics, 'K-means', 'euclidean')
     return 0
 
