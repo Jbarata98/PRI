@@ -165,8 +165,8 @@ def calc_gain_based_measures(predicted, expected, k_values=(5, 10, 15, 20), metr
             sum_ndcg += value / math.log(j + 2, 2)
             if (j + 1) in k_values:
                 optimal_dcg.append(sum_ndcg)
-        ndcg = [dcg[k] / optimal_dcg[k] if optimal_dcg[k] else 0 for k in range(len(k_values))]
-        return ndcg
+        ndcg = [dcg[k] / optimal_dcg[k] if optimal_dcg[k] else 0 for k in range(len(dcg))]
+        return ndcg + ndcg[-1:] * (len(k_values) - len(dcg)) #adjust for missing k values
 
     metrics = {
         'nDCG': ndcg,
@@ -292,7 +292,7 @@ def plot_confusion_matrix(ax, cnf_mtx, labels, title="", class_name="class"):
     return
 
 
-def print_general_stats(precision_results):
+def print_general_stats(precision_results, title=None):
     metrics_scores, results = defaultdict(list), defaultdict(list)
 
     for q_id, data in precision_results.items():
@@ -309,7 +309,7 @@ def print_general_stats(precision_results):
 
     results['BPref'] = [stats['value'] for k, stats in ir.bpref(precision_results, K_TESTS[:-1] + ('all',)).items()]
     results['BPref'] = [x if x else results['BPref'][-1] for x in results['BPref']]
-    multiple_line_chart(plt.gca(), list(K_TESTS), results, 'Metrics', 'k', 'score',
+    multiple_line_chart(plt.gca(), list(K_TESTS), results, 'Metrics' + (f" for {title}" if title else ""), 'k', 'score',
                         True, False, True)
     plt.show()
 
