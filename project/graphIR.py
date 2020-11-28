@@ -9,7 +9,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import pandas as pd
 
 import classifier as cl
+
 from metrics import *
+
 from parsers import *
 
 from sklearn.metrics.pairwise import cosine_similarity, manhattan_distances, euclidean_distances
@@ -62,16 +64,20 @@ def classify_graph(classification_results, Dtest, Qtest, Rtest, type):
     pk_type = 'vanilla_pk' if type == 'vanilla' else 'extended_pk'
     with cl.tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=False) as q_tqdm:
         for q in q_tqdm:
+            retrieved_docs_ids = undirected_page_rank(classification_results[q], D = docs['test'], p = -1, sim = cosine_similarity, th = threshold)[pk_type]
+
             ranking_result = {
                 'unrelated_documents': classification_results[q]['unrelated_documents'],
-                'total_result': classification_results[q]['total_result'],
-                'visited_documents': classification_results[q]['visited_documents'],
-                'visited_documents_orders': classification_results[q]['visited_documents_orders'],
-                'assessed_documents': classification_results[q]['assessed_documents'],
-                'document_probabilities': undirected_page_rank(classification_results[q], D = docs['test'], p = -1, sim = cosine_similarity, th = threshold)[pk_type]
+                'total_result': len(retrieved_docs_ids),
+                'visited_documents': list(retrieved_docs_ids),
+                'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_docs_ids)},
+                'assessed_documents': {doc_id: (rank + 1, int(doc_id in Rtest['p'].get(q, []))) for rank, doc_id in enumerate(retrieved_docs_ids) if
+                                       doc_id in Rtest['p'].get(q, []) or doc_id in Rtest['n'].get(q, [])},
+                'document_probabilities': retrieved_docs_ids
             }
             ranking_results[q].update(ranking_result)
     return ranking_results
+
 
 
 def main():
@@ -81,7 +87,12 @@ def main():
     for topic in classification_results:
         pr_values = undirected_page_rank(classification_results[topic], D = docs['test'], p = 10, sim = cosine_similarity, th = threshold)
         # print({topic : pr_values})
-    graph_results = classify_graph(classification_results, docs['test'],topics,topic_index, type = 'vanilla')
-    print(graph_results)
+    graph_results_vanilla  = classify_graph(classification_results, docs['test'],topics,topic_index, type = 'vanilla'),
+    graph_results_personalized = classify_graph(classification_results, docs['test'], topics, topic_index, type='extended')
+
+    metrics_per_sorted_topic(graph_results_personalized, title = 'Vanilla PageRank metrics per topic')
+    print_general_stats(graph_results_personalized, title = 'Vanilla PageRank metrics per topic')
+    plot_iap_for_models({'vanilla': graph_results_vanilla, 'personalized': graph_results_personalized})
+
 if __name__ == '__main__':
     main()
