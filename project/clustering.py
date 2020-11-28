@@ -1,4 +1,6 @@
 import numpy as np
+from kneed import KneeLocator
+
 from metrics import *
 from parsers import *
 import classifier as cl
@@ -17,7 +19,7 @@ from scipy.spatial.distance import cdist
 
 SUBSET_SIZE = 10000
 RANDOM_STATE = 123
-DEFAULT_N_INIT = 3
+DEFAULT_N_INIT = 2
 
 
 def checkpoint():
@@ -33,8 +35,8 @@ def checkpoint():
 # separar por hierarchical e partitioning
 def clustering(D, approach, distance):
     cp = checkpoint()
-    clusters = [300]
-    distortions, silhouettes = [], []
+    clusters = list([int(1.45 ** i) for i in range(2, 20)])
+    distortions, silhouettes, inertias = [], [], []
     D = dict(itertools.islice(D.items(), SUBSET_SIZE)) if len(D) > 1000 else D
     tfidf_vectorizer = cl.tfidf_vectorizer
     print("Init:", next(cp))
@@ -51,9 +53,10 @@ def clustering(D, approach, distance):
         elif approach == 'Agglomerative':
             model = AgglomerativeClustering(n_clusters=nr, affinity=distance, linkage="complete").fit(X.toarray())
 
+        inertias.append(model.inertia_)
 
-        # distortions.append(sum(np.min(pairwise_distances(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
-        # print("Distortions (sparse):", next(cp))
+        distortions.append(sum(np.min(pairwise_distances(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
+        print("Distortions (sparse):", next(cp))
         # distortions.append(sum(np.min(cdist(X, model.cluster_centers_, "cosine"), axis=1)) / vector_space.toarray().shape[0])
         # print("Distortions (dense):", next(cp))
 
@@ -65,10 +68,22 @@ def clustering(D, approach, distance):
         print(silhouettes)
 
         # plt.plot(clusters, distortions, color='blue', label="elbow", linestyle='--') #elbow method
-    plt.plot(clusters, silhouettes, color='red', label="silhouette", linestyle='--')  # silhouette
+    KneeLocator(clusters, inertias, curve = "convex", direction = "decreasing").plot_knee()
+    plt.xlabel("k")
+    plt.ylabel("Inertia")
+    plt.title(f"{approach} Silhouette Scores showing the optimal k ")
+    plt.show()
+    # plt.plot(clusters, silhouettes, color='red', label="silhouette", linestyle='--')  # silhouette
+    KneeLocator(clusters, silhouettes, curve = "concave", direction = "increasing").plot_knee()
     plt.xlabel("k")
     plt.ylabel("Silhouettes")
     plt.title(f"{approach} Silhouette Scores showing the optimal k ")
+    plt.show()
+    # plt.plot(clusters, distortions, color='red', label="distortions", linestyle='--')  # silhouette
+    KneeLocator(clusters, distortions, curve = "convex", direction = "decreasing").plot_knee()
+    plt.xlabel("k")
+    plt.ylabel("Distortions")
+    plt.title(f"{approach} Distortions Scores showing the optimal k ")
     plt.show()
 
         # silhouettesaggt.append(silhouette_score(vectorspace_topics, modelagg.labels_, metric=distance))
@@ -131,7 +146,7 @@ def main():
     docs, topics, topic_index, doc_index = cl.setup()
 
     # agglomerative_clustering(docs, 'Agglomerative', 'cosine')
-    clustering(docs['train'], 'Agglomerative', 'cosine')
+    clustering(docs['train'], 'Kmeans', 'cosine')
     # clustering(topics, 'K-means', 'euclidean')
     return 0
 
