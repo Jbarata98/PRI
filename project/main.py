@@ -2,6 +2,7 @@ import string
 import time
 import jsonpickle
 import nltk
+import warnings
 import pandas as pd
 import whoosh.scoring
 from collections import defaultdict
@@ -107,18 +108,21 @@ def SimplePreprocessor(article):
 
 
 class InvertedIndex:
-    def __init__(self, D, analyzer: NamedAnalyzer = None, scoring=None):
+    def __init__(self, D, analyzer: NamedAnalyzer = None, scoring=None, skip_indexing=False):
         self.D_name, self.D = D
         self.analyzer = analyzer if analyzer else NamedAnalyzer(StemmingAnalyzer(), "stemming_stopwords")
         self.whoosh_dir = f"whoosh/{self.D_name}_{self.analyzer}"
-        raw_text_test = self.analyzer.process_raw_texts(self._raw_text_from_dict(self.D))
-        dud_analyzer = lambda x: x.split()
-        self.boolean_index = CountVectorizer(binary=True, analyzer=dud_analyzer)
-        self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
-        self.tfidf_index = TfidfVectorizer(vocabulary=self.boolean_index.vocabulary, analyzer=dud_analyzer)
-        self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
-        self._save_index()
-        self.scoring = scoring if scoring else NamedBM25F()
+        if skip_indexing:
+            warnings.warn("Skiping indexing, errors will be thrown if checkpoints don't exist")
+        else:
+            raw_text_test = self.analyzer.process_raw_texts(self._raw_text_from_dict(self.D))
+            dud_analyzer = lambda x: x.split()
+            self.boolean_index = CountVectorizer(binary=True, analyzer=dud_analyzer)
+            self.boolean_test_matrix = self.boolean_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING BOOLEAN":20}'))
+            self.tfidf_index = TfidfVectorizer(vocabulary=self.boolean_index.vocabulary, analyzer=dud_analyzer)
+            self.tfidf_test_matrix = self.tfidf_index.fit_transform(tqdm(raw_text_test, desc=f'{"INDEXING TFIDF":20}'))
+            self._save_index()
+            self.scoring = scoring if scoring else NamedBM25F()
 
     @staticmethod
     def _raw_text_from_dict(doc_dict):
@@ -276,7 +280,7 @@ def setup(use_eval=USE_ONLY_EVAL):
     return docs, topics, topic_index, doc_index, topic_index_n, doc_index_n
 
 
-def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=()):
+def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=(), skip_indexing=False):
     global doc_index, doc_index_n, topic_index, topic_index_n
     doc_index, doc_index_n = R
 
@@ -298,7 +302,7 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=()):
 
     for analyzer in analyzers:
         print(f"\nEvaluating models with preprocessing: {analyzer}...")
-        I, indexing_time, indexing_space = indexing(D, analyzer=analyzer)
+        I, indexing_time, indexing_space = indexing(D, analyzer=analyzer, skip_indexing=skip_indexing)
         print(f'Indexing time: {indexing_time:10.3f}s, Indexing space: {indexing_space / (1024 ** 2):10.3f}mb')
 
         # a)
