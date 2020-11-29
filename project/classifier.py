@@ -1,4 +1,6 @@
 import random
+from copy import deepcopy
+
 import main as p1
 from typing import List
 
@@ -11,7 +13,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from scipy.sparse import hstack
 
-from BM25Vectorizer import BM25Vectorizer
+from BM25Vectorizer import *
 from metrics import *
 from parsers import *
 
@@ -155,11 +157,12 @@ class SparseVectorClassifier:
 mlp_classifier = NamedClassifier(MLPClassifier(random_state=1, max_iter=1000), "MLP", "mlp")
 mnb_classifier = NamedClassifier(MultinomialNB(), 'Multinomial Naïve Bayes', "mnb")
 knn_classifier = NamedClassifier(KNeighborsClassifier(n_neighbors=3), 'KNN', "knn")
-
 tfidf_vectorizer = NamedVectorizer(TfidfVectorizer(), 'TF-IDF')
 tf_vectorizer = NamedVectorizer(CountVectorizer(), 'TF')
 bm25_vectorizer = NamedVectorizer(BM25Vectorizer(), 'BM25')
-static_tfidf_vectorizer = StaticVectorizer(TfidfVectorizer(), 'TF-IDF')
+
+bm25_scorer = NamedVectorizer(BM25Scorer(), 'BM25 scorer')
+static_tfidf_vectorizer = StaticVectorizer(TfidfVectorizer(), 'static TF-IDF')
 tf_and_idf_vectorizer = EnsembleVectorizer(tfidf_vectorizer, tf_vectorizer)
 tf_and_idf_and_bm25_vectorizer = EnsembleVectorizer(tfidf_vectorizer, tf_vectorizer, bm25_vectorizer)
 
@@ -224,113 +227,181 @@ def training(q, Dtrain, Rtrain, classifier=None, vectorizer=None, **args):
 
 
 def classify(d: dict, q: str, M: SparseVectorClassifier, **args):
-    return M.predict_proba([' '.join(d.values())])[0][np.where(M.classes == 1)][0]
+    values_ = M.predict_proba([' '.join(d.values())])[0]
+    return values_[np.where(M.classes == 1)][0]
 
 
 def entropy(p):
     # return 0 if p in (0, 1) else -p * math.log(p, 2) - (1 - p) * math.log(1 - p, 2)
-    return min(p, 1 - p)
+    return 1 - p
 
 
-def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_classifier,), vectorizers: List[NamedVectorizer] = (tfidf_vectorizer,), **args):
-    total_results, models_ranking_results = {}, {}
+def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_classifier,), vectorizers: List[NamedVectorizer] = (tfidf_vectorizer,), retrieval_results=None, **args):
+    total_results, models_classification_results, models_ranking_results = {}, {}, {}
     for vectorizer in vectorizers:
         for classifier in classifiers:
+            reranking_results = None
 
-            print(f"Classifying with classifier: {classifier}, and vectorizer: {vectorizer}:")
-            classification_results = get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer)
+            print(f"\nClassifying with classifier: {classifier}, and vectorizer: {vectorizer}:")
+            if retrieval_results:
+                reranking_results = deepcopy(retrieval_results)
+            classification_results = get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, reranking_results)
             title = f'{classifier} & {vectorizer}'
-            models_ranking_results[f'{classifier} & {vectorizer}'] = classification_results
+            models_classification_results[title] = classification_results
 
-            results = defaultdict(dict)
-            for q, result in classification_results.items():
-                results[q]['tp'] = len(result['predicted_related'].intersection(result['related_documents']))
-                results[q]['fn'] = len(result['predicted_unrelated'].intersection(result['related_documents']))
-                results[q]['fp'] = len(result['predicted_related'].intersection(result['unrelated_documents']))
-                results[q]['tn'] = len(result['predicted_unrelated'].intersection(result['unrelated_documents']))
+            ids_sorted_by_entropy, metrics = plot_classification_metrics(classification_results, title)
 
-                correct = results[q]['tp'] + results[q]['tn']
-                results[q]['accuracy'] = (correct / (correct + results[q]['fp'] + results[q]['fn']))
-                results[q]['1-entropy'] = 1 - entropy(len(result['related_documents']) / len(result['assessed_documents']))
-                results[q]['sensitivity'] = (results[q]['tp'] / max(results[q]['tp'] + results[q]['fn'], 1))
-                results[q]['specificity'] = (results[q]['tn'] / max(results[q]['tn'] + results[q]['fp'], 1))
-
-            metrics = {'1-entropy': [], 'accuracy': [], 'sensitivity': [], 'specificity': []}
-            ids_sorted_by_entropy = sorted(classification_results, key=lambda a: results[a]['1-entropy'])
-            for metric in metrics:
-                metrics[metric] = [results[q_id][metric] for q_id in ids_sorted_by_entropy]
             total_results[title] = metrics['accuracy']
-            total_results['1-entropy'] = metrics['1-entropy']
-            plt.figure(figsize=(15, 5))
-            multiple_line_chart(plt.gca(), ids_sorted_by_entropy, metrics, f"Classification performance statistics for {classifier} with {vectorizer}", "Topics", "Percentage", show_points=True,
-                                ypercentage=True)
-            plt.show()
-            plt.figure(figsize=(15, 5))
-            metrics_per_sorted_topic(classification_results, title)
+            total_results['negative bias'] = metrics['negative bias']
+
+            if reranking_results:
+                plt.figure(figsize=(15, 5))
+                metrics_per_sorted_topic(reranking_results, title)
+                plt.figure()
+                print_general_stats(reranking_results, title)
+                models_ranking_results[title] = reranking_results
 
     plt.figure(figsize=(15, 5))
     multiple_line_chart(plt.gca(), ids_sorted_by_entropy, total_results, f"Classification accuracy statistics for multiple approaches", "Topics", "Accuracy", show_points=True,
                         ypercentage=True)
     plt.show()
 
-    p1.topics = topics
-    models_ranking_results.update(p1.evaluation(Qtest, (p1.invert_index(Rtest['p']), p1.invert_index(Rtest['n'])), ('test', Dtest), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),)))
+    if models_ranking_results:
+        title = f'Ranking Baseline'
+        models_ranking_results[title] = retrieval_results
+        plt.figure(figsize=(15, 5))
+        metrics_per_sorted_topic(retrieval_results, title)
+        plt.figure()
+        print_general_stats(retrieval_results, title)
 
-    plt.figure(figsize=(15, 5))
-    plot_iap_for_models(models_ranking_results)
+        plt.figure(figsize=(15, 5))
+        plot_iap_for_models(models_ranking_results)
 
     return dict(classification_results)
 
 
-def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer):
-    # <Get Retrieval results>
-    classification_results_file = f"classification_results/eval_{classifier.file_term}_{vectorizer.file_term}"
+def plot_classification_metrics(classification_results, title):
+    results = defaultdict(dict)
+    for q, result in classification_results.items():
+        results[q]['tp'] = len(result['predicted_related'].intersection(result['related_documents']))
+        results[q]['fn'] = len(result['predicted_unrelated'].intersection(result['related_documents']))
+        results[q]['fp'] = len(result['predicted_related'].intersection(result['unrelated_documents']))
+        results[q]['tn'] = len(result['predicted_unrelated'].intersection(result['unrelated_documents']))
+
+        correct = results[q]['tp'] + results[q]['tn']
+        results[q]['accuracy'] = (correct / (correct + results[q]['fp'] + results[q]['fn']))
+        results[q]['negative bias'] = entropy(len(result['related_documents']) / len(result['assessed_documents']))
+        results[q]['sensitivity'] = (results[q]['tp'] / max(results[q]['tp'] + results[q]['fn'], 1))
+        results[q]['specificity'] = (results[q]['tn'] / max(results[q]['tn'] + results[q]['fp'], 1))
+    metrics = {'negative bias': [], 'accuracy': [], 'sensitivity': [], 'specificity': []}
+    ids_sorted_by_entropy = sorted(classification_results, key=lambda a: results[a]['negative bias'])
+    for metric in metrics:
+        metrics[metric] = [results[q_id][metric] for q_id in ids_sorted_by_entropy]
+    plt.figure(figsize=(15, 5))
+    multiple_line_chart(plt.gca(), ids_sorted_by_entropy, metrics, f"Classification performance statistics for {title}", "Topics", "Percentage", show_points=True,
+                        ypercentage=True)
+    plt.show()
+    return ids_sorted_by_entropy, metrics
+
+
+def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_retrieval=None, skip_classification=False):
+    classification_results, classification_exists = None, False
+
+    classification_results_file = f"classification_results/eval_{classifier.file_term}_{vectorizer.file_term}.json"
+    ranking_results_file = f"reranking_results/eval_{classifier.file_term}_{vectorizer.file_term}.json"
     if not os.path.exists("classification_results"):
         os.mkdir("classification_results")
-    if os.path.isfile(classification_results_file):
-        print(f"Retrieval results already exist, loading from file (\"{classification_results_file}\")...")
+    if not os.path.exists("reranking_results"):
+        os.mkdir("reranking_results")
+
+    # Classification checkpoint exists
+    if (not skip_classification) and os.path.isfile(classification_results_file):
+        print(f"Classification results already exist, loading from file (\"{classification_results_file}\")...")
         classification_results = jsonpickle.decode(open(classification_results_file, encoding='ISO-8859-1').read())
+        classification_exists = True
+
+        if not pre_retrieval:
+            return classification_results
+
+    # Ranking checkpoint exists
+    if os.path.isfile(ranking_results_file):
+        print(f"Reranking results already exist, loading from file (\"{ranking_results_file}\")...")
+        pre_retrieval.update(jsonpickle.decode(open(ranking_results_file, encoding='ISO-8859-1').read()))
+        if not (classification_exists or skip_classification):
+            print(f"Classification results don't exist, retrieving with model...")
+            classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=None, skip_classification=skip_classification)
     else:
-        print(f"Retrieval results don't exist, retrieving with model...")
-        classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer)
+        print(f"Reranking results don't exist, retrieving with model...")
+        classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=pre_retrieval, skip_classification=skip_classification)
+        print(f"Saving reranking to file (\"{ranking_results_file}\")...")
+        with open(ranking_results_file, 'w', encoding='ISO-8859-1') as f:
+            f.write(jsonpickle.encode(pre_retrieval, indent=4))
+
+    # Save results
+    if not classification_exists and classification_results:
+        print(f"Saving classification to file (\"{classification_results_file}\")...")
         with open(classification_results_file, 'w', encoding='ISO-8859-1') as f:
             f.write(jsonpickle.encode(classification_results, indent=4))
-    # </Get Retrieval results>
+
+
     return classification_results
 
 
-def classify_topics(Dtest, Qtest, Rtest, classifier: NamedClassifier = None, vectorizer=None):
-    raw_results = {}
-    ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in Rtest['p'].items()}
+def classify_topics(Dtest, Qtest, Rtest, classifier: NamedClassifier = None, vectorizer=None, k=DEFAULT_K, pre_retrieval=None, skip_classification=False):
+    classification_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in Rtest['p'].items()}
     with tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=False) as q_tqdm:
         for q in q_tqdm:
             q_tqdm.set_description(desc=f'{f"CLASSIFYING {q}":20}')
 
             model = training(q, docs['train'], Rtest, classifier=classifier, vectorizer=vectorizer)
-            raw_results = {'p': {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, Rtest['p'].get(q, [])).items()},
-                           'n': {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, Rtest['n'].get(q, [])).items()}}
-            retrieved_doc_ids = dict(sorted({**raw_results['p'], **raw_results['n']}.items(), key=lambda x: x[1], reverse=True))
-            ranking_result = {
-                'unrelated_documents': set(Rtest['n'].get(q, [])),
-                'total_result': len(retrieved_doc_ids),
-                'visited_documents': list(retrieved_doc_ids),
-                'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
-                'assessed_documents': {doc_id: (rank + 1, int(doc_id in Rtest['p'].get(q, []))) for rank, doc_id in enumerate(retrieved_doc_ids) if
-                                       doc_id in Rtest['p'].get(q, []) or doc_id in Rtest['n'].get(q, [])},
-                'document_probabilities': retrieved_doc_ids,
-                'predicted_related': set([doc_id for doc_id, prob in retrieved_doc_ids.items() if round(prob)]),
-                'predicted_unrelated': set([doc_id for doc_id, prob in retrieved_doc_ids.items() if not round(prob)]),
-            }
-            ranking_results[q].update(ranking_result)
-    return ranking_results
+
+            # CLASSIFICATION
+            if not skip_classification:
+                raw_results = {'p': {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, Rtest['p'].get(q, [])).items()},
+                               'n': {d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, Rtest['n'].get(q, [])).items()}}
+                retrieved_doc_ids = dict(sorted({**raw_results['n'], **raw_results['p']}.items(), key=lambda x: x[1], reverse=True))
+                classification_result = {
+                    'unrelated_documents': set(Rtest['n'].get(q, [])),
+                    'total_result': len(retrieved_doc_ids),
+                    'visited_documents': list(retrieved_doc_ids),
+                    'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_doc_ids)},
+                    'assessed_documents': {doc_id: (rank + 1, int(doc_id in Rtest['p'].get(q, []))) for rank, doc_id in enumerate(retrieved_doc_ids) if
+                                           doc_id in Rtest['p'].get(q, []) or doc_id in Rtest['n'].get(q, [])},
+                    'document_probabilities': retrieved_doc_ids,
+                    'predicted_related': set([doc_id for doc_id, prob in retrieved_doc_ids.items() if round(prob)]),
+                    'predicted_unrelated': set([doc_id for doc_id, prob in retrieved_doc_ids.items() if not round(prob)]),
+                }
+                classification_results[q].update(classification_result)
+
+            # RANKING
+            if pre_retrieval:
+                retrieved_docs_ids = dict(sorted({d_id: classify(doc, q, model) for d_id, doc in get_subset(Dtest, pre_retrieval[q]['visited_documents']).items()}
+                                                 .items(), key=lambda x: x[1], reverse=True))
+
+                ranking_result = {
+                    'visited_documents': list(retrieved_docs_ids),
+                    'visited_documents_orders': {doc_id: rank + 1 for rank, doc_id in enumerate(retrieved_docs_ids)},
+                    'document_probabilities': retrieved_docs_ids
+                }
+                pre_retrieval[q].update(ranking_result)
+
+    return classification_results
 
 
 def main():
     global docs, topics, topic_index, doc_index
     docs, topics, topic_index, doc_index = setup()
     print('ola joao Barata :)\n' + ''.join([random.choice(("\u5350", "\u534d")) for _ in range(1000)]), "\n    __\n|__|__\n __|  |")
+
+    try:
+        p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=True)
+    except Exception as e:
+        p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=False)
+
+    p1_ranking = list(p1_ranking.values())[0]
     # static_tfidf_vectorizer.fit([' '.join(list(doc.values())) for doc in docs['train'].values()] )
-    evaluate(topics, docs['test'], topic_index, classifiers=(mlp_classifier, knn_classifier), vectorizers=(tf_vectorizer, tfidf_vectorizer))
+    evaluate(topics, docs['test'], topic_index, classifiers=(mlp_classifier, knn_classifier), vectorizers=(tf_vectorizer, tfidf_vectorizer), retrieval_results=p1_ranking)
+    # evaluate(topics, docs['test'], topic_index, classifiers=(knn_classifier,), vectorizers=(bm25_vectorizer, bm25_scorer, bm25_full_scorer))
     print("ADEUS BARATA")
 
 

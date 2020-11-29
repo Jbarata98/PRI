@@ -5,6 +5,7 @@ ADAPTED
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
 from scipy import sparse
 
 
@@ -13,6 +14,7 @@ class BM25Vectorizer(object):
         self.vectorizer = TfidfVectorizer(norm=None, smooth_idf=False)
         self.b = b
         self.k1 = k1
+        self.full = True
 
     def fit(self, X):
         """ Fit IDF to documents X """
@@ -32,17 +34,28 @@ class BM25Vectorizer(object):
         assert sparse.isspmatrix_csr(q)
 
         # convert to csc for better column slicing
-        X = X.tocsc()[:, q.indices]
+        X = X.tocsc()
         denom = X + (k1 * (1 - b + b * len_X / avdl))[:, None]
+
         # idf(t) = log [ n / df(t) ] + 1 in sklearn, so it need to be coneverted
         # to idf(t) = log [ n / df(t) ] with minus 1
-        idf = self.vectorizer._tfidf.idf_[None, q.indices] - 1.
-        numer = X.multiply(np.broadcast_to(idf, X.shape)) * (k1 + 1)
-        return (numer / denom).sum(1).A1
+        idf = self.vectorizer._tfidf.idf_ - 1.
+        numer = sparse.csr_matrix(X.multiply(np.broadcast_to(idf, X.shape))) * (k1 + 1)
+
+        return (numer / denom) if self.full else (numer / denom)[:, q.indices]
 
     def transform(self, X):
-        return np.array([self.transform_query(x, self.X) for x in X])
+        return np.array([self.transform_query(x, [x]).A1 for x in X])
 
     def fit_transform(self, X):
         self.fit(X)
         return self.transform(X)
+
+
+class BM25Scorer(BM25Vectorizer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.full = False
+
+    def transform(self, X):
+        return normalize(np.array([self.transform_query(x, self.X).sum(1).A1 for x in X]))
