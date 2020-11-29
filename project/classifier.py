@@ -319,9 +319,14 @@ def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_
         print(f"Classification results already exist, loading from file (\"{classification_results_file}\")...")
         classification_results = jsonpickle.decode(open(classification_results_file, encoding='ISO-8859-1').read())
         classification_exists = True
+    else:
+        if not skip_classification:
+            print(f"Classification results don't exist, retrieving with model...")
+            classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=None, skip_classification=skip_classification)
 
-        if not pre_retrieval:
-            return classification_results
+    if not pre_retrieval:
+        return classification_results
+
 
     # Ranking checkpoint exists
     if os.path.isfile(ranking_results_file):
@@ -400,9 +405,9 @@ def main():
 
     p1_ranking = list(p1_ranking.values())[0]
     # static_tfidf_vectorizer.fit([' '.join(list(doc.values())) for doc in docs['train'].values()] )
-    evaluate(topics, docs['test'], topic_index, classifiers=(mlp_classifier, knn_classifier), vectorizers=(tf_vectorizer, tfidf_vectorizer), retrieval_results=p1_ranking)
-    # evaluate(topics, docs['test'], topic_index, classifiers=(knn_classifier,), vectorizers=(bm25_vectorizer, bm25_scorer, bm25_full_scorer))
-    print("ADEUS BARATA")
+    # evaluate(topics, docs['test'], topic_index, classifiers=(mlp_classifier, knn_classifier), vectorizers=(tf_vectorizer, tfidf_vectorizer), retrieval_results=p1_ranking)
+    evaluate(topics, docs['test'], topic_index, classifiers=(knn_classifier, mlp_classifier), vectorizers=(bm25_vectorizer, bm25_scorer), retrieval_results=p1_ranking)
+    # print("ADEUS BARATA")
 
 
 if __name__ == '__main__':
