@@ -298,7 +298,7 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=(), skip
     topic_index = invert_index(doc_index)
     topic_index_n = invert_index(doc_index_n)
 
-    models_ranking_results = {}
+    models_ranking_results, models_retrieval_results = {}, {}
 
     for analyzer in analyzers:
         print(f"\nEvaluating models with preprocessing: {analyzer}...")
@@ -327,6 +327,7 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=(), skip
                     with open(retrieval_results_file, 'w', encoding='ISO-8859-1') as f:
                         f.write(jsonpickle.encode(retrieval_results, indent=4))
                 # </Get Retrieval results>
+                models_retrieval_results[f"{analyzer} {metric}"] = retrieval_results
 
             # <Get Ranking results>
             ranking_results_file = f"{I.whoosh_dir.replace('whoosh', 'ranking_results')}_{I.scoring}.json"
@@ -371,8 +372,7 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=(), skip
         models_ranking_results[f"RFF"] = ranking_results
         plot_iap_for_models(models_ranking_results)
 
-    return models_ranking_results
-
+    return models_ranking_results, models_retrieval_results if models_retrieval_results else models_ranking_results
 
 
 def plot_a(I, Q, analyzer, metric):
@@ -394,32 +394,36 @@ def plot_a(I, Q, analyzer, metric):
     plt.xticks(rotation=75)
     plt.show()
 
-def retrieve_topics(I, topic_index, topic_index_n, k = 5, metric=None):
 
+def retrieve_topics(I, topic_index, topic_index_n, k=5, metric=None):
     retrieval_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in topic_index.items()}
 
     for q in tqdm(topic_index, desc=f'{f"RETRIEVING":20}'):
         retrieved_doc_ids = boolean_query(q, I, k, metric=metric)
+        assessed_doc_ids = set(topic_index.get(q, []) + topic_index_n.get(q, []))
         retrieval_result = {
+            'unrelated_documents': set(topic_index_n.get(q, [])),
             'total_result': len(retrieved_doc_ids),
             'visited_documents': retrieved_doc_ids,
-            'assessed_documents': {doc_id: int(doc_id in topic_index[q]) for doc_id in retrieved_doc_ids if
-                                   doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])}
+            'assessed_documents': {doc_id: int(doc_id in topic_index[q]) for doc_id in assessed_doc_ids if
+                                   doc_id in topic_index.get(q, []) or doc_id in topic_index_n.get(q, [])},
 
+            'predicted_related': set(retrieved_doc_ids).intersection(assessed_doc_ids),
+            'predicted_unrelated': assessed_doc_ids.difference(retrieved_doc_ids),
         }
         retrieval_results[q].update(retrieval_result)
     return retrieval_results
 
-def get_boolean_at_k(I,k_values):
+
+def get_boolean_at_k(I, k_values):
     k_dict = defaultdict(list)
     for k in k_values:
-        retrieval_results_at_k = retrieve_topics(I, topic_index, topic_index_n,k, metric='tfidf')
+        retrieval_results_at_k = retrieve_topics(I, topic_index, topic_index_n, k, metric='tfidf')
         boolean_precision_values = calculate_precision_boolean(I, retrieval_results_at_k)
         k_dict[k].append(boolean_precision_values['f-beta'])
         plt.figure(figsize=(15, 5))
-        bar_chart(plt.gca(),list(retrieval_results_at_k.keys()), k_dict[k][0], 'f beta distribution for' + ' ' + str(k) + ' ' + 'terms', "topics", "f-beta")
+        bar_chart(plt.gca(), list(retrieval_results_at_k.keys()), k_dict[k][0], 'f beta distribution for' + ' ' + str(k) + ' ' + 'terms', "topics", "f-beta")
     return k_dict
-
 
 
 def rank_topics(I, topic_index, topic_index_n, scoring=None, leave=True):

@@ -1,5 +1,8 @@
+import abc
 import random
 from copy import deepcopy
+
+from sklearn.model_selection import GridSearchCV
 
 import main as p1
 from typing import List
@@ -18,6 +21,11 @@ from metrics import *
 from parsers import *
 
 OVERRIDE_SAVED_JSON = False
+LAYER_COMPS = (
+    (100,),
+    (100, 50,),
+    (100, 50, 25),
+)
 
 topics = None
 docs = None
@@ -51,7 +59,6 @@ class NamedClassifier():
 
     def predict_proba(self, X):
         return self.classifier.predict_proba(X)
-
     @property
     def classes(self):
         return self.classifier.classes_
@@ -157,6 +164,10 @@ class SparseVectorClassifier:
 mlp_classifier = NamedClassifier(MLPClassifier(random_state=1, max_iter=1000), "MLP", "mlp")
 mnb_classifier = NamedClassifier(MultinomialNB(), 'Multinomial Naïve Bayes', "mnb")
 knn_classifier = NamedClassifier(KNeighborsClassifier(n_neighbors=3), 'KNN', "knn")
+
+tuned_knn_classifier = NamedClassifier(GridSearchCV(KNeighborsClassifier(), {'n_neighbors': (1, 3, 5, 7), 'metric': ('euclidean', 'manhattan')}, verbose=0, cv=3), 'Tuned KNN')
+tuned_bm25_classifier = NamedClassifier(GridSearchCV(MLPClassifier(max_iter=300), {'hidden_layer_sizes': LAYER_COMPS}, verbose=0, cv=3), 'Tuned MLP')
+
 tfidf_vectorizer = NamedVectorizer(TfidfVectorizer(), 'TF-IDF')
 tf_vectorizer = NamedVectorizer(CountVectorizer(), 'TF')
 bm25_vectorizer = NamedVectorizer(BM25Vectorizer(), 'BM25')
@@ -236,15 +247,15 @@ def entropy(p):
     return 1 - p
 
 
-def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_classifier,), vectorizers: List[NamedVectorizer] = (tfidf_vectorizer,), retrieval_results=None, **args):
+def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_classifier,), vectorizers: List[NamedVectorizer] = (tfidf_vectorizer,), ranking_results=None, retrieval_results=None, **args):
     total_results, models_classification_results, models_ranking_results = {}, {}, {}
     for vectorizer in vectorizers:
         for classifier in classifiers:
             reranking_results = None
 
             print(f"\nClassifying with classifier: {classifier}, and vectorizer: {vectorizer}:")
-            if retrieval_results:
-                reranking_results = deepcopy(retrieval_results)
+            if ranking_results:
+                reranking_results = deepcopy(ranking_results)
             classification_results = get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, reranking_results)
             title = f'{classifier} & {vectorizer}'
             models_classification_results[title] = classification_results
@@ -261,6 +272,11 @@ def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_clas
                 print_general_stats(reranking_results, title)
                 models_ranking_results[title] = reranking_results
 
+    if retrieval_results:
+        title = f'Retrieval Baseline'
+        ids_sorted_by_entropy, metrics = plot_classification_metrics(retrieval_results, title)
+        total_results[title] = metrics['accuracy']
+
     plt.figure(figsize=(15, 5))
     multiple_line_chart(plt.gca(), ids_sorted_by_entropy, total_results, f"Classification accuracy statistics for multiple approaches", "Topics", "Accuracy", show_points=True,
                         ypercentage=True)
@@ -268,11 +284,11 @@ def evaluate(Qtest, Dtest, Rtest, classifiers: List[NamedClassifier] = (mlp_clas
 
     if models_ranking_results:
         title = f'Ranking Baseline'
-        models_ranking_results[title] = retrieval_results
+        models_ranking_results[title] = ranking_results
         plt.figure(figsize=(15, 5))
-        metrics_per_sorted_topic(retrieval_results, title)
+        metrics_per_sorted_topic(ranking_results, title)
         plt.figure()
-        print_general_stats(retrieval_results, title)
+        print_general_stats(ranking_results, title)
 
         plt.figure(figsize=(15, 5))
         plot_iap_for_models(models_ranking_results)
@@ -308,7 +324,7 @@ def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_
     classification_results, classification_exists = None, False
 
     classification_results_file = f"classification_results/eval_{classifier.file_term}_{vectorizer.file_term}.json"
-    ranking_results_file = f"reranking_results/eval_{classifier.file_term}_{vectorizer.file_term}.json"
+    reranking_results_file = f"reranking_results/eval_{classifier.file_term}_{vectorizer.file_term}.json"
     if not os.path.exists("classification_results"):
         os.mkdir("classification_results")
     if not os.path.exists("reranking_results"):
@@ -319,27 +335,27 @@ def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_
         print(f"Classification results already exist, loading from file (\"{classification_results_file}\")...")
         classification_results = jsonpickle.decode(open(classification_results_file, encoding='ISO-8859-1').read())
         classification_exists = True
-    else:
-        if not skip_classification:
-            print(f"Classification results don't exist, retrieving with model...")
-            classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=None, skip_classification=skip_classification)
+    elif not skip_classification and not pre_retrieval:
+        print(f"Classification results don't exist, retrieving with model...")
+        classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=None, skip_classification=skip_classification)
+        with open(reranking_results_file, 'w', encoding='ISO-8859-1') as f:
+            f.write(jsonpickle.encode(pre_retrieval, indent=4))
 
     if not pre_retrieval:
         return classification_results
 
-
     # Ranking checkpoint exists
-    if os.path.isfile(ranking_results_file):
-        print(f"Reranking results already exist, loading from file (\"{ranking_results_file}\")...")
-        pre_retrieval.update(jsonpickle.decode(open(ranking_results_file, encoding='ISO-8859-1').read()))
+    if os.path.isfile(reranking_results_file):
+        print(f"Reranking results already exist, loading from file (\"{reranking_results_file}\")...")
+        pre_retrieval.update(jsonpickle.decode(open(reranking_results_file, encoding='ISO-8859-1').read()))
         if not (classification_exists or skip_classification):
             print(f"Classification results don't exist, retrieving with model...")
             classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=None, skip_classification=skip_classification)
     else:
         print(f"Reranking results don't exist, retrieving with model...")
         classification_results = classify_topics(Dtest, Qtest, Rtest, classifier=classifier, vectorizer=vectorizer, pre_retrieval=pre_retrieval, skip_classification=skip_classification)
-        print(f"Saving reranking to file (\"{ranking_results_file}\")...")
-        with open(ranking_results_file, 'w', encoding='ISO-8859-1') as f:
+        print(f"Saving reranking to file (\"{reranking_results_file}\")...")
+        with open(reranking_results_file, 'w', encoding='ISO-8859-1') as f:
             f.write(jsonpickle.encode(pre_retrieval, indent=4))
 
     # Save results
@@ -347,7 +363,6 @@ def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_
         print(f"Saving classification to file (\"{classification_results_file}\")...")
         with open(classification_results_file, 'w', encoding='ISO-8859-1') as f:
             f.write(jsonpickle.encode(classification_results, indent=4))
-
 
     return classification_results
 
@@ -398,16 +413,18 @@ def main():
     docs, topics, topic_index, doc_index = setup()
     print('ola joao Barata :)\n' + ''.join([random.choice(("\u5350", "\u534d")) for _ in range(1000)]), "\n    __\n|__|__\n __|  |")
 
+    p1.topics = topics
     try:
-        p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=True)
+        p1_results = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), 'tfidf', skip_indexing=True)
     except Exception as e:
-        p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=False)
+        p1_results = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), 'tfidf', skip_indexing=False)
 
-    p1_ranking = list(p1_ranking.values())[0]
+    p1_ranking = list(p1_results[0].values())[0]
+    p1_retrieval = list(p1_results[1].values())[0]
     # static_tfidf_vectorizer.fit([' '.join(list(doc.values())) for doc in docs['train'].values()] )
-    # evaluate(topics, docs['test'], topic_index, classifiers=(mlp_classifier, knn_classifier), vectorizers=(tf_vectorizer, tfidf_vectorizer), retrieval_results=p1_ranking)
-    evaluate(topics, docs['test'], topic_index, classifiers=(knn_classifier, mlp_classifier), vectorizers=(bm25_vectorizer, bm25_scorer), retrieval_results=p1_ranking)
-    # print("ADEUS BARATA")
+    # evaluate(topics, docs['test'], topic_index, classifiers=(tuned_knn_classifier, knn_classifier), vectorizers=(bm25_vectorizer, tfidf_vectorizer), ranking_results=p1_ranking)
+    evaluate(topics, docs['test'], topic_index, classifiers=[tuned_bm25_classifier], vectorizers=[bm25_vectorizer, tfidf_vectorizer], ranking_results=p1_ranking, retrieval_results=p1_retrieval)
+    print("ADEUS BARATA")
 
 
 if __name__ == '__main__':
