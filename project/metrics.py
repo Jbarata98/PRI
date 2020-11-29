@@ -93,7 +93,8 @@ def calc_precision_based_measures(predicted_ids, expected_ids, ks=(10,), metric=
     if metric is None:
         metric = metrics.keys()
 
-    return {f'{measure}@{k}': metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids], k) for k in ks for measure in metric}
+    return {f'{measure}@{k}': metrics[measure]([int(i) for i in predicted_ids], [int(i) for i in expected_ids], k) for k
+            in ks for measure in metric}
 
 
 def precision_recall_generator(predicted, expected):
@@ -113,7 +114,8 @@ def tp_fp_fn_generator(predicted, expected):
 
 
 def plot_tp_fp_fn_for_p(ranking_results):
-    tp_fp_fn = {'true positives': defaultdict(list), 'false positives': defaultdict(list), 'false negatives': defaultdict(list)}
+    tp_fp_fn = {'true positives': defaultdict(list), 'false positives': defaultdict(list),
+                'false negatives': defaultdict(list)}
 
     for q_id, data in ranking_results.items():
         tp_fp_fn_g = tp_fp_fn_generator(data['visited_documents'], data['related_documents'])
@@ -126,7 +128,8 @@ def plot_tp_fp_fn_for_p(ranking_results):
     for metric, data in tp_fp_fn.items():
         tp_fp_fn[metric] = np.mean(list(data.values()), axis=0)
 
-    multiple_line_chart(plt.gca(), list(range(1, len(list(tp_fp_fn.values())[0]) + 1)), tp_fp_fn, 'True positives, false positives and false negatives false for p', 'p', 'score',
+    multiple_line_chart(plt.gca(), list(range(1, len(list(tp_fp_fn.values())[0]) + 1)), tp_fp_fn,
+                        'True positives, false positives and false negatives false for p', 'p', 'score',
                         False, False, False)
     plt.show()
 
@@ -143,7 +146,8 @@ def plot_precicion_recall_for_p(ranking_results):
     for metric, data in precision_recall.items():
         precision_recall[metric] = np.mean(list(data.values()), axis=0)
 
-    multiple_line_chart(plt.gca(), list(range(1, len(list(precision_recall.values())[0]) + 1)), precision_recall, 'Precision and recall for p', 'p', 'score',
+    multiple_line_chart(plt.gca(), list(range(1, len(list(precision_recall.values())[0]) + 1)), precision_recall,
+                        'Precision and recall for p', 'p', 'score',
                         False, False, True)
     plt.show()
 
@@ -166,7 +170,7 @@ def calc_gain_based_measures(predicted, expected, k_values=(5, 10, 15, 20), metr
             if (j + 1) in k_values:
                 optimal_dcg.append(sum_ndcg)
         ndcg = [dcg[k] / optimal_dcg[k] if optimal_dcg[k] else 0 for k in range(len(dcg))]
-        return ndcg + ndcg[-1:] * (len(k_values) - len(dcg)) #adjust for missing k values
+        return ndcg + ndcg[-1:] * (len(k_values) - len(dcg))  # adjust for missing k values
 
     metrics = {
         'nDCG': ndcg,
@@ -189,7 +193,8 @@ def MRR(predicted, expected):
 
 
 def BPREF(predicted, relevant, non_relevant):
-    relevant_answers, non_relevant_answers = set(predicted).intersection(set(relevant)), set(predicted).intersection(set(non_relevant))
+    relevant_answers, non_relevant_answers = set(predicted).intersection(set(relevant)), set(predicted).intersection(
+        set(non_relevant))
     counter = 0
     Bpref = 0
     sum = 0
@@ -219,16 +224,21 @@ def precision_boolean_metrics(I, retrieval_results):
     for q_id in retrieval_results.keys():
         unrelated_documents = set(doc_ids_total).difference(retrieval_results[q_id]['related_documents'])
         unvisited_documents = set(retrieval_results[q_id]['related_documents']).union(unrelated_documents)
-        confusion_matrix_vals['tp'] += len(set([k for k, v in retrieval_results[q_id]['assessed_documents'].items() if v]))
+        confusion_matrix_vals['tp'] += len(
+            set([k for k, v in retrieval_results[q_id]['assessed_documents'].items() if v]))
         confusion_matrix_vals['tn'] += len(unvisited_documents.intersection(unrelated_documents))
-        confusion_matrix_vals['fp'] += len(set(retrieval_results[q_id]['assessed_documents']).intersection(unrelated_documents))
-        confusion_matrix_vals['fn'] += len(unvisited_documents.intersection(set(retrieval_results[q_id]['related_documents'])))
-    confusion_matrix_vals['precision'], confusion_matrix_vals['recall'], confusion_matrix_vals['f-beta'] = np.mean(confusion_matrix_vals['precision']), np.mean(
+        confusion_matrix_vals['fp'] += len(
+            set(retrieval_results[q_id]['assessed_documents']).intersection(unrelated_documents))
+        confusion_matrix_vals['fn'] += len(
+            unvisited_documents.intersection(set(retrieval_results[q_id]['related_documents'])))
+    confusion_matrix_vals['precision'], confusion_matrix_vals['recall'], confusion_matrix_vals['f-beta'] = np.mean(
+        confusion_matrix_vals['precision']), np.mean(
         confusion_matrix_vals['recall']), np.mean(confusion_matrix_vals['f-beta'])
     return confusion_matrix_vals
 
 
-def bar_chart(ax: plt.Axes, xvalues: list, yvalues: list, title: str, xlabel: str, ylabel: str, percentage=False, reverse=None):
+def bar_chart(ax: plt.Axes, xvalues: list, yvalues: list, title: str, xlabel: str, ylabel: str, percentage=False,
+              reverse=None):
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -255,10 +265,12 @@ def calculate_precision_boolean(I, retrieval_results, normalized=False):
         precision_dict['precision'].append(0 if not tp else tp / (tp + fp))
         precision_dict['recall'].append(0 if not tp else tp / (tp + fn))
 
-        precision_dict['f-beta'].append(0 if precision == recall == 0 else ((1 + 0.5 ** 2) * (precision * recall)) / ((0.5 ** 2) * precision + recall))
+        precision_dict['f-beta'].append(0 if precision == recall == 0 else ((1 + 0.5 ** 2) * (precision * recall)) / (
+                    (0.5 ** 2) * precision + recall))
 
     if normalized:
-        precision_dict['precision'], precision_dict['recall'], precision_dict['f-beta'] = np.mean(precision_dict['precision']), np.mean(precision_dict['recall']), np.mean(precision_dict['f-beta'])
+        precision_dict['precision'], precision_dict['recall'], precision_dict['f-beta'] = np.mean(
+            precision_dict['precision']), np.mean(precision_dict['recall']), np.mean(precision_dict['f-beta'])
     return precision_dict
 
 
@@ -296,9 +308,11 @@ def print_general_stats(precision_results, title=None):
     metrics_scores, results = defaultdict(list), defaultdict(list)
 
     for q_id, data in precision_results.items():
-        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'], K_TESTS).items():
+        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'],
+                                                           K_TESTS).items():
             metrics_scores[metric].append(score)
-        for i , score in enumerate(calc_gain_based_measures(data['visited_documents'], data['related_documents'], K_TESTS)['nDCG']):
+        for i, score in enumerate(
+                calc_gain_based_measures(data['visited_documents'], data['related_documents'], K_TESTS)['nDCG']):
             metrics_scores[f'NDCG@{K_TESTS[i]}'].append(score)
 
     for metric, scores in metrics_scores.items():
@@ -319,21 +333,26 @@ def metrics_per_sorted_topic(precision_results, title=None):
     map_results = {}
 
     for q_id, data in precision_results.items():
-        metric, score = list(calc_precision_based_measures(data['visited_documents'], data['related_documents'], (DEFAULT_P,), ('map',)).items())[0]
+        metric, score = list(
+            calc_precision_based_measures(data['visited_documents'], data['related_documents'], (DEFAULT_P,),
+                                          ('map',)).items())[0]
         map_results[q_id] = score
 
     sorted_q_ids = sorted(map_results.keys(), key=map_results.get)
 
     for q_id in sorted_q_ids:
         data = precision_results[q_id]
-        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'], (10, DEFAULT_P), ('precision', 'recall', 'fbeta', 'map')).items():
+        for metric, score in calc_precision_based_measures(data['visited_documents'], data['related_documents'],
+                                                           (10, DEFAULT_P),
+                                                           ('precision', 'recall', 'fbeta', 'map')).items():
             metrics_scores[metric].append(score)
         metrics_scores['BPref'].append(list(ir.bpref({q_id: precision_results[q_id]}, (10,)).items())[0][1]['value'])
 
-    picked = {'BPref@10': metrics_scores['BPref'], 'MAP': metrics_scores[f'map@{DEFAULT_P}'], 'precision@10': metrics_scores[f'precision@{10}'], 'recall@10': metrics_scores[f'recall@{10}']}
+    picked = {'BPref@10': metrics_scores['BPref'], 'MAP': metrics_scores[f'map@{DEFAULT_P}'],
+              'precision@10': metrics_scores[f'precision@{10}'], 'recall@10': metrics_scores[f'recall@{10}']}
 
-
-    multiple_line_chart(plt.gca(), sorted_q_ids, picked, 'Metrics by topic, sorted by MAP score' + f" for {title}" if title else "", 'topic', 'score',
+    multiple_line_chart(plt.gca(), sorted_q_ids, picked,
+                        'Metrics by topic, sorted by MAP score' + f" for {title}" if title else "", 'topic', 'score',
                         True, False, True)
     plt.show()
 

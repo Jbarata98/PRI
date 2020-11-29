@@ -54,16 +54,19 @@ def build_graph(D, sim, th):
     return sim_graph
 
 
-def undirected_page_rank(q, D, p, sim, th, baseline = False):
+def undirected_page_rank(q, D, p, sim, th, priors):
     results = {}
     doc_ids = q['visited_documents']
     sim_graph = build_graph(cl.get_subset(D, doc_ids), sim, th)
-    if baseline:
-        pr_values = {'vanilla_pk': pk.pagerank(sim_graph, max_iter=50, weight=None)}
-    else:
-        pr_values = {'vanilla_pk': pk.pagerank(sim_graph, max_iter=50, weight=None),
-                    'extended_pk': pk.pagerank(sim_graph, max_iter=50, weight='weight',
-                                            personalization=q['document_probabilities'])}
+
+    if priors == 'baseline':    # if baseline tries priors regarding 1st delivery
+        priors_vec = {doc_id: 1/(50 + rank) for doc_id,rank in q['visited_documents_orders'].items()}
+    elif priors == 'classification': # if classification tries priors regarding 2nd delivery
+        priors_vec = q['document_probabilities']
+
+    pr_values = {'vanilla_pk': pk.pagerank(sim_graph, max_iter=50, weight=None),
+                'extended_pk': pk.pagerank(sim_graph, max_iter=50, weight='weight',
+                                            personalization=priors_vec)}
 
     for pr_type in pr_values:
         results[pr_type] = cl.get_subset(pr_values[pr_type],
@@ -72,7 +75,7 @@ def undirected_page_rank(q, D, p, sim, th, baseline = False):
     return results
 
 
-def classify_graph(classification_results, Dtest, Qtest, Rtest, type, th, base = False):
+def classify_graph(classification_results, Dtest, Qtest, Rtest, type, th,priors):
     ranking_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in Rtest['p'].items()}
     pk_type = 'vanilla_pk' if type == 'vanilla' else 'extended_pk'
     with cl.tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=False) as q_tqdm:
@@ -80,7 +83,7 @@ def classify_graph(classification_results, Dtest, Qtest, Rtest, type, th, base =
             q_tqdm.set_description(desc=f'{f"CLASSIFYING {q}":20}')
 
             retrieved_docs_ids = \
-            undirected_page_rank(classification_results[q], D=docs['test'], p=-1, sim=cosine_similarity, th=threshold, baseline = base)[
+            undirected_page_rank(classification_results[q], D=docs['test'], p=-1, sim=cosine_similarity, th=threshold, priors = priors)[
                 pk_type]
 
             ranking_result = {
@@ -98,9 +101,9 @@ def classify_graph(classification_results, Dtest, Qtest, Rtest, type, th, base =
     return ranking_results
 
 
-def get_pk_results(classification_baseline, Dtest, Qtest, Rtest, type, threshold):
+def get_pk_results(classification_baseline, Dtest, Qtest, Rtest, type, threshold, priors):
     # <Get Retrieval results>
-    pk_results_file = f"pagerank_results/eval_{type}_{threshold}"
+    pk_results_file = f"pagerank_results/eval_{type}_{threshold}_{priors}"
     if not os.path.exists("pagerank_results"):
         os.mkdir("pagerank_results")
     if os.path.isfile(pk_results_file):
@@ -108,7 +111,7 @@ def get_pk_results(classification_baseline, Dtest, Qtest, Rtest, type, threshold
         pk_results = jsonpickle.decode(open(pk_results_file, encoding='ISO-8859-1').read())
     else:
         print(f"Retrieval results don't exist, retrieving with model...")
-        pk_results = classify_graph(classification_baseline, Dtest, Qtest, Rtest, type=type, th=threshold)
+        pk_results = classify_graph(classification_baseline, Dtest, Qtest, Rtest, type=type, th=threshold, priors = priors)
         with open(pk_results_file, 'w', encoding='ISO-8859-1') as f:
             f.write(jsonpickle.encode(pk_results, indent=4))
     # </Get Retrieval results>
@@ -134,10 +137,10 @@ def plot_avg_centrality(D, sim, th):
 
 
 def plot_statistics_for_graph(graph_results, pk_type):
-    metrics_per_sorted_topic(graph_results, title=f'{pk_type} PageRank metrics per topic')
-    print_general_stats(graph_results, title='f{pk_type} PageRank metrics per topic')
+    metrics_per_sorted_topic(graph_results, title=f'{pk_type} PageRank')
+    print_general_stats(graph_results, title=f'{pk_type} PageRank')
 
-def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold):
+def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold, priors):
     try:
         p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']),
                                    (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=True)
@@ -147,9 +150,11 @@ def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold):
     p1_ranking = list(p1_ranking.values())[0]
 
 
-    pk_results_vanilla = classify_graph(p1_ranking, Dtest, Qtest, Rtest, type='vanilla', th=threshold, base = True)
-    plot_iap_for_models({'Baseline IR System': p1_ranking, 'Vanilla': pk_results_vanilla})
+    pk_results_vanilla = get_pk_results(p1_ranking, Dtest, Qtest, Rtest, type='vanilla', threshold = threshold,  priors = priors)
+    pk_results_extended= get_pk_results(p1_ranking, Dtest, Qtest, Rtest, type='extended', threshold = threshold,  priors = priors)
 
+    plot_iap_for_models({'Baseline IR System': p1_ranking, 'Vanilla': pk_results_vanilla})
+    plot_iap_for_models({'Baseline IR System': p1_ranking, 'Personalized': pk_results_extended})
 
 
 QUESTION = 'a'
@@ -176,29 +181,36 @@ def main():
 
     elif QUESTION == 'a':
 
-        compare_graph_to_baseline(docs['test'], topics, topic_index, threshold)
+        compare_graph_to_baseline(docs['test'], topics, topic_index, threshold, priors = 'baseline')
 
         graph_results_vanilla = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                               type='vanilla', threshold = threshold)
+                                               type='vanilla', threshold = threshold, priors = 'baseline')
 
+        graph_results_extended = get_pk_results(classification_results, docs['test'], topics, topic_index,
+                                               type='extended', threshold=threshold, priors='baseline')
 
         plot_statistics_for_graph(graph_results_vanilla, pk_type='Vanilla')
+        plot_statistics_for_graph(graph_results_extended, pk_type='Personalized')
+
 
     elif QUESTION == 'b':
+
         print("Question b: \n")
         th_variation = plot_variation_threshold(classification_results, docs['test'], topics, topic_index,
                                                 pk_type='extended_pk')
         plot_iap_for_models(th_variation)
 
     elif QUESTION == 'c':
+
         print("Question c: \n")
         plot_avg_centrality(docs['test'], sim=cosine_similarity, th=threshold)
 
     elif QUESTION == 'd':
+
         graph_results_vanilla = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                               type='vanilla', threshold=threshold)
+                                               type='vanilla', threshold=threshold, priors = 'classification')
         graph_results_personalized = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                                    type='extended', threshold=threshold)
+                                                    type='extended', threshold=threshold, priors = 'classification')
         plot_iap_for_models({'vanilla': graph_results_vanilla, 'personalized': graph_results_personalized})
 
 
