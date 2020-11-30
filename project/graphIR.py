@@ -158,8 +158,8 @@ def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold, priors):
     plot_iap_for_models({'Baseline IR System': p1_ranking, 'Personalized': pk_results_extended})
 
 
-QUESTION = 'a'
-FUNCTIONALITY = 'None'
+QUESTION = 'd'
+FUNCTIONALITY =  None
 TOPIC = 'R101'
 def main():
     global docs, topics, topic_index, doc_index
@@ -213,9 +213,9 @@ def main():
     elif QUESTION == 'd':
 
         graph_results_vanilla = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                               type='vanilla', threshold=THRESHOLD, priors = 'baseline')
+                                               type='vanilla', threshold=THRESHOLD, priors = 'classification')
         graph_results_personalized = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                                    type='extended', threshold=THRESHOLD, priors = 'baseline')
+                                                    type='extended', threshold=THRESHOLD, priors = 'classification')
         plot_iap_for_models({'vanilla': graph_results_vanilla, 'personalized': graph_results_personalized})
 
 
