@@ -83,7 +83,7 @@ def classify_graph(classification_results, Dtest, Qtest, Rtest, type, th,priors)
             q_tqdm.set_description(desc=f'{f"CLASSIFYING {q}":20}')
 
             retrieved_docs_ids = \
-            undirected_page_rank(classification_results[q], D=docs['test'], p=-1, sim=cosine_similarity, th=threshold, priors = priors)[
+            undirected_page_rank(classification_results[q], D=docs['test'], p=-1, sim=cosine_similarity, th=th, priors = priors)[
                 pk_type]
 
             ranking_result = {
@@ -118,12 +118,12 @@ def get_pk_results(classification_baseline, Dtest, Qtest, Rtest, type, threshold
     return pk_results
 
 
-def plot_variation_threshold(classification_results, docs, topics, topic_index, pk_type):
+def plot_variation_threshold(classification_results, docs, topics, topic_index, pk_type, priors):
     th_scores = defaultdict(dict)
     th_scores[f"Baseline {CLASSIFIER}"].update(classification_results)
     for th in np.arange(0.0, 1.0, 0.1):
         th_scores[f"{th:.1f} threshold"].update(
-            get_pk_results(classification_results, docs, topics, topic_index, type=pk_type, threshold=th))
+            get_pk_results(classification_results, docs, topics, topic_index, type=pk_type, threshold=th, priors = priors ))
     return th_scores
 
 
@@ -141,6 +141,7 @@ def plot_statistics_for_graph(graph_results, pk_type):
     print_general_stats(graph_results, title=f'{pk_type} PageRank')
 
 def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold, priors):
+    p1.topics = topics
     try:
         p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']),
                                    (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=True)
@@ -157,10 +158,9 @@ def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold, priors):
     plot_iap_for_models({'Baseline IR System': p1_ranking, 'Personalized': pk_results_extended})
 
 
-QUESTION = 'a'
-FUNCTIONALITY = None
-
-
+QUESTION = 'd'
+FUNCTIONALITY =  None
+TOPIC = 'R101'
 def main():
     global docs, topics, topic_index, doc_index
     docs, topics, topic_index, doc_index = cl.setup()
@@ -168,16 +168,15 @@ def main():
 
     classification_results = cl.get_classification_results(docs['test'], topics, topic_index,
                                                            classifier=CLASSIFIER, vectorizer=VECTORIZER)
-    threshold = 0.5
+    THRESHOLD = 0.5
     if FUNCTIONALITY == 'a':
-        graph = build_graph(docs['test'], sim=cosine_similarity(), th=threshold)
-        print("graph:", graph)
+        graph = build_graph(docs['test'], sim=cosine_similarity, th=THRESHOLD)
+        print("graph nodes:", graph.nodes)
 
     elif FUNCTIONALITY == 'b':
-        for topic in classification_results:
-            pr_values = undirected_page_rank(classification_results[topic], D=docs['test'], p=10, sim=cosine_similarity,
-                                             th=threshold)
-        print({topic: pr_values})
+        pr_values = undirected_page_rank(classification_results[TOPIC], D=docs['test'], p=10, sim=cosine_similarity,
+                                             th=threshold, priors = 'classification')
+        print({TOPIC: pr_values})
 
     elif QUESTION == 'a':
 
@@ -193,24 +192,30 @@ def main():
         plot_statistics_for_graph(graph_results_extended, pk_type='Personalized')
 
 
-    elif QUESTION == 'b':
+    elif QUESTION == 'b': #plots for vanilla
 
         print("Question b: \n")
-        th_variation = plot_variation_threshold(classification_results, docs['test'], topics, topic_index,
-                                                pk_type='extended_pk')
-        plot_iap_for_models(th_variation)
+        th_variation_no_priors = plot_variation_threshold(classification_results, docs['test'], topics, topic_index,
+                                                  pk_type='vanilla', priors = 'classification')
+
+        th_variation_priors = plot_variation_threshold(classification_results, docs['test'], topics, topic_index,
+                                                pk_type='extended_pk', priors= 'classification')
+
+        plot_iap_for_models(th_variation_no_priors)
+        plot_iap_for_models(th_variation_priors)
+
 
     elif QUESTION == 'c':
 
         print("Question c: \n")
-        plot_avg_centrality(docs['test'], sim=cosine_similarity, th=threshold)
+        plot_avg_centrality(docs['test'], sim=cosine_similarity, th=THRESHOLD)
 
     elif QUESTION == 'd':
 
         graph_results_vanilla = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                               type='vanilla', threshold=threshold, priors = 'classification')
+                                               type='vanilla', threshold=THRESHOLD, priors = 'classification')
         graph_results_personalized = get_pk_results(classification_results, docs['test'], topics, topic_index,
-                                                    type='extended', threshold=threshold, priors = 'classification')
+                                                    type='extended', threshold=THRESHOLD, priors = 'classification')
         plot_iap_for_models({'vanilla': graph_results_vanilla, 'personalized': graph_results_personalized})
 
 

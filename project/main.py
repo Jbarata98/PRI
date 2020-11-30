@@ -372,7 +372,10 @@ def evaluation(Q, R, D, analyzers=None, scorings=(), metric=(), explore=(), skip
         models_ranking_results[f"RFF"] = ranking_results
         plot_iap_for_models(models_ranking_results)
 
-    return models_ranking_results, models_retrieval_results if models_retrieval_results else models_ranking_results
+    if models_retrieval_results:
+        return models_ranking_results, models_retrieval_results
+    else:
+        return models_ranking_results
 
 
 def plot_a(I, Q, analyzer, metric):

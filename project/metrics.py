@@ -357,6 +357,42 @@ def metrics_per_sorted_topic(precision_results, title=None):
     plt.show()
 
 
+def results_metric_per_sorted_topic(precision_results, metric='map', baseline=None):
+    if baseline is None:
+        baseline = list(precision_results)[0]
+
+    _metric, p = metric, DEFAULT_P
+    if '@' in _metric:
+        _metric, p = _metric.split('@')
+
+    p = int(p)
+    all_scores = defaultdict(list)
+    map_results = {}
+
+    for q_id, data in precision_results[baseline].items():
+        _, score = list(
+            calc_precision_based_measures(data['visited_documents'], data['related_documents'], (p,),
+                                          (_metric,)).items())[0]
+        map_results[q_id] = score
+    sorted_q_ids = sorted(map_results.keys(), key=map_results.get)
+    all_scores[baseline] = [map_results[q] for q in sorted_q_ids]
+
+    for model, result in precision_results.items():
+        if model == baseline:
+            continue
+
+        for q_id in sorted_q_ids:
+            _, score = list(
+                calc_precision_based_measures(result[q_id]['visited_documents'], result[q_id]['related_documents'], (p,),
+                                              (_metric,)).items())[0]
+            all_scores[model].append(score)
+
+    multiple_line_chart(plt.gca(), sorted_q_ids, all_scores,
+                        f'Models {_metric}@{p} by topic, sorted by {baseline}', 'topic', f'{_metric}@{p}',
+                        True, False, True)
+    plt.show()
+
+
 def plot_iap_for_models(models_ranking_results):
     Y = {}
     for model, ranking_results in models_ranking_results.items():
