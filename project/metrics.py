@@ -354,6 +354,8 @@ def metrics_per_sorted_topic(precision_results, title=None):
     multiple_line_chart(plt.gca(), sorted_q_ids, picked,
                         'Metrics by topic, sorted by MAP score' + f" for {title}" if title else "", 'topic', 'score',
                         True, False, True)
+    plt.rc('grid', color='grey', linewidth=1, alpha=0.3)
+    plt.grid(axis='x')
     plt.show()
 
 
@@ -390,6 +392,8 @@ def results_metric_per_sorted_topic(precision_results, metric='map', baseline=No
     multiple_line_chart(plt.gca(), sorted_q_ids, all_scores,
                         f'Models {_metric}@{p} by topic, sorted by {baseline}', 'topic', f'{_metric}@{p}',
                         True, False, True)
+    plt.rc('grid', color='grey', linewidth=1, alpha=0.3)
+    plt.grid(axis='x')
     plt.show()
 
 
