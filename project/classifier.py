@@ -28,8 +28,8 @@ TESTED_LAYER_COMPS = (
     (25,),
     (50,),
     (100,),
-    (50, 100),
-    (100, 50),
+    (25, 100),
+    (100, 25),
     (25, 50, 100),
     (100, 50, 25),
 )
@@ -176,7 +176,7 @@ knn_classifier = NamedClassifier(KNeighborsClassifier(n_neighbors=3), 'KNN', "kn
 
 # TESTED TUNING
 tuned_knn_classifier = NamedClassifier(GridSearchCV(KNeighborsClassifier(), {'n_neighbors': TESTED_N_NEIGHBOURS, 'metric': TESTED_KNN_DISTANCES}, verbose=0, cv=3), 'Tuned KNN')
-tuned_mlp_classifier = NamedClassifier(GridSearchCV(MLPClassifier(max_iter=300), {'hidden_layer_sizes': TESTED_LAYER_COMPS}, verbose=0, cv=3), 'Tuned MLP')
+tuned_mlp_classifier = NamedClassifier(GridSearchCV(MLPClassifier(max_iter=500), {'hidden_layer_sizes': TESTED_LAYER_COMPS}, verbose=0, cv=3), 'Tuned MLP')
 
 # TESTED VECTORIZERS
 tfidf_vectorizer = NamedVectorizer(TfidfVectorizer(), 'TF-IDF')
@@ -281,7 +281,7 @@ def evaluate(Qtest, Dtest, Rtest, models=((tfidf_vectorizer, mlp_classifier),), 
         ids_sorted_by_entropy, metrics = plot_classification_metrics(classification_results, title)
 
         total_results[title] = metrics['accuracy']
-        total_results['negative bias'] = metrics['negative bias']
+        total_results['Negative Bias'] = metrics['negative bias']
 
         if reranking_results:
             plt.figure(figsize=(15, 5))
@@ -299,6 +299,8 @@ def evaluate(Qtest, Dtest, Rtest, models=((tfidf_vectorizer, mlp_classifier),), 
     plt.figure(figsize=(15, 5))
     multiple_line_chart(plt.gca(), ids_sorted_by_entropy, total_results, f"Classification accuracy statistics for multiple approaches", "Topics", "Accuracy", show_points=True,
                         ypercentage=True)
+    plt.rc('grid', color='grey', linewidth=1, alpha=0.3)
+    plt.grid(axis='x')
     plt.show()
 
     if models_ranking_results:
@@ -343,6 +345,8 @@ def plot_classification_metrics(classification_results, title):
     plt.figure(figsize=(15, 5))
     multiple_line_chart(plt.gca(), ids_sorted_by_entropy, metrics, f"Classification performance statistics for {title}", "Topics", "Percentage", show_points=True,
                         ypercentage=True)
+    plt.rc('grid', color='grey', linewidth=1, alpha=0.3)
+    plt.grid(axis='x')
     plt.show()
     return ids_sorted_by_entropy, metrics
 
@@ -396,7 +400,7 @@ def get_classification_results(Dtest, Qtest, Rtest, classifier, vectorizer, pre_
 
 def classify_topics(Dtest, Qtest, Rtest, classifier: NamedClassifier = None, vectorizer=None, k=DEFAULT_K, pre_retrieval=None, skip_classification=False):
     classification_results = {q_id: {'related_documents': set(doc_ids)} for q_id, doc_ids in Rtest['p'].items()}
-    with tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=False) as q_tqdm:
+    with tqdm(Qtest, desc=f'{f"CLASSIFYING {list(Qtest)[0]}":20}', leave=True, dynamic_ncols=True) as q_tqdm:
         for q in q_tqdm:
             q_tqdm.set_description(desc=f'{f"CLASSIFYING {q}":20}')
 
@@ -438,11 +442,24 @@ def classify_topics(Dtest, Qtest, Rtest, classifier: NamedClassifier = None, vec
 get_all_combinations = lambda xs, ys: [(x, y) for x in xs for y in ys]
 
 
-def main():
+class Experiment(Enum):
+    mlp = 0
+    tuned_mlp = 2
+    knn = 3
+    tuned_knn = 4
+    compare_simple = 5
+    emsembles_mlp = 6
+    emsembles_knn = 7
+    ablation_knn_neighbours = 8
+    ablation_knn_distances = 9
+    ablation_mlp_1_layer_comps = 10
+    ablation_mlp_2_layer_comps = 11
+    ablation_mlp_3_layer_comps = 12
+
+
+def main(experiment=Experiment.compare_simple):
     global docs, topics, topic_index, doc_index
     docs, topics, topic_index, doc_index = setup()
-    print('ola joao Barata :)\n' + ''.join([random.choice(("\u5350", "\u534d")) for _ in range(1000)]), "\n    __\n|__|__\n __|  |")
-
     p1.topics = topics
     try:
         p1_results = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']), (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), 'tfidf', skip_indexing=True)
@@ -452,84 +469,60 @@ def main():
     p1_ranking = list(p1_results[0].values())[0]
     p1_retrieval = list(p1_results[1].values())[0]
 
-    class Experiment(Enum):
-        mlp = 0
-        tuned_mlp = 2
-        knn = 3
-        tuned_knn = 4
-        compare_simple = 5
-        emsembles_mlp = 6
-        emsembles_knn = 7
-        ablation_knn_neighbours = 8
-        ablation_knn_distances = 9
-        ablation_mlp_1_layer_comps = 10
-        ablation_mlp_2_layer_comps = 11
-        ablation_mlp_3_layer_comps = 12
-
-    experiment = Experiment.ablation_mlp_3_layer_comps
-
-    if experiment == Experiment.mlp:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(simple_vectorizers, [mlp_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+    experimental_evaluate = lambda models: evaluate(topics, docs['test'], topic_index, models=models, ranking_results=p1_ranking,
+                                                    retrieval_results=p1_retrieval)
+    if experiment == experiment:
+        experimental_evaluate(get_all_combinations(simple_vectorizers, [mlp_classifier]))
 
     elif experiment == Experiment.tuned_mlp:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(simple_vectorizers, [tuned_mlp_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations(simple_vectorizers, [tuned_mlp_classifier]))
 
     elif experiment == Experiment.knn:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(simple_vectorizers, [knn_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations(simple_vectorizers, [knn_classifier]))
 
     elif experiment == Experiment.tuned_knn:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(simple_vectorizers, [tuned_knn_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations(simple_vectorizers, [tuned_knn_classifier]))
 
     elif experiment == Experiment.compare_simple:
-        evaluate(topics, docs['test'], topic_index, models=[(tfidf_vectorizer, tuned_mlp_classifier), (tfidf_vectorizer, tuned_knn_classifier)], ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate([(tfidf_vectorizer, tuned_mlp_classifier), (tfidf_vectorizer, tuned_knn_classifier)])
 
     elif experiment == Experiment.emsembles_knn:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(emsembled_vectorizers + (tfidf_vectorizer,), [tuned_knn_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations(emsembled_vectorizers + (tfidf_vectorizer,), [tuned_knn_classifier]))
 
     elif experiment == Experiment.emsembles_mlp:
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations(emsembled_vectorizers + (tfidf_vectorizer,), [tuned_mlp_classifier]), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations(emsembled_vectorizers + (tfidf_vectorizer,), [tuned_mlp_classifier]))
 
     elif experiment == Experiment.ablation_knn_neighbours:
         knn_n_neighbour_variant_classifiers = [NamedClassifier(GridSearchCV(KNeighborsClassifier(n_neighbors=k), {'metric': TESTED_KNN_DISTANCES}, verbose=0, cv=3), f'Tuned {k}NN') for k in
                                                TESTED_N_NEIGHBOURS]
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations((tfidf_vectorizer,), knn_n_neighbour_variant_classifiers), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        experimental_evaluate(get_all_combinations((tfidf_vectorizer,), knn_n_neighbour_variant_classifiers))
 
     elif experiment == Experiment.ablation_knn_distances:
         knn_distance_variant_classifiers = [NamedClassifier(GridSearchCV(KNeighborsClassifier(metric=distance), {'n_neighbors': TESTED_N_NEIGHBOURS}, verbose=0, cv=3), f'Tuned KNN {distance}') for
-                                             distance in TESTED_KNN_DISTANCES]
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations((tfidf_vectorizer,), knn_distance_variant_classifiers), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+                                            distance in TESTED_KNN_DISTANCES]
+        experimental_evaluate(get_all_combinations((tfidf_vectorizer,), knn_distance_variant_classifiers))
 
     elif experiment == Experiment.ablation_mlp_1_layer_comps:
         mlp_1_layer_comp_variant_classifiers = [NamedClassifier(MLPClassifier(hidden_layer_sizes=layer_comp, random_state=1, max_iter=1000), f'MLP {layer_comp}', f'mlp_{layer_comp[0]}') for
-                                             layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 1]
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations((tfidf_vectorizer,), mlp_1_layer_comp_variant_classifiers), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+                                                layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 1]
+        experimental_evaluate(get_all_combinations((tfidf_vectorizer,), mlp_1_layer_comp_variant_classifiers))
 
     elif experiment == Experiment.ablation_mlp_2_layer_comps:
-        mlp_2_layer_comp_variant_classifiers = [NamedClassifier(MLPClassifier(hidden_layer_sizes=layer_comp, random_state=1, max_iter=1000), f'MLP {layer_comp}', f'mlp_{layer_comp[0]}_{layer_comp[1]}') for
-                                             layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 2]
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations((tfidf_vectorizer,), mlp_2_layer_comp_variant_classifiers), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        mlp_2_layer_comp_variant_classifiers = [
+            NamedClassifier(MLPClassifier(hidden_layer_sizes=layer_comp, random_state=1, max_iter=1000), f'MLP {layer_comp}', f'mlp_{layer_comp[0]}_{layer_comp[1]}') for
+            layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 2]
+        experimental_evaluate(get_all_combinations((tfidf_vectorizer,), mlp_2_layer_comp_variant_classifiers))
 
     elif experiment == Experiment.ablation_mlp_3_layer_comps:
-        mlp_3_layer_comp_variant_classifiers = [NamedClassifier(MLPClassifier(hidden_layer_sizes=layer_comp, random_state=1, max_iter=1000), f'MLP {layer_comp}', f'mlp_{layer_comp[0]}_{layer_comp[1]}_{layer_comp[2]}') for
-                                             layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 3]
-        evaluate(topics, docs['test'], topic_index, models=get_all_combinations((tfidf_vectorizer,), mlp_3_layer_comp_variant_classifiers), ranking_results=p1_ranking,
-                 retrieval_results=p1_retrieval)
+        mlp_3_layer_comp_variant_classifiers = [
+            NamedClassifier(MLPClassifier(hidden_layer_sizes=layer_comp, random_state=1, max_iter=1000), f'MLP {layer_comp}', f'mlp_{layer_comp[0]}_{layer_comp[1]}_{layer_comp[2]}') for
+            layer_comp in TESTED_LAYER_COMPS if len(layer_comp) == 3]
+        experimental_evaluate(get_all_combinations((tfidf_vectorizer,), mlp_3_layer_comp_variant_classifiers))
 
     else:
         print("Insert a valid experiment")
 
-    # evaluate(topics, docs['test'], topic_index, models=get_all_combinations([bm25_vectorizer, tfidf_vectorizer], [mlp_classifier, knn_classifier]), ranking_results=p1_ranking,retrieval_results=p1_retrieval)
+    # experimental_evaluate(get_all_combinations([bm25_vectorizer, tfidf_vectorizer], [mlp_classifier, knn_classifier]), ranking_results=p1_ranking,retrieval_results=p1_retrieval)
 
 
 if __name__ == '__main__':

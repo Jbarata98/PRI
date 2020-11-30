@@ -17,3 +17,4 @@ project/collection/rcv1_test.json
 project/collection/rcv1_train.json
 project/classification_results/*
 project/reranking_results/*
+project/pagerank_results/*
