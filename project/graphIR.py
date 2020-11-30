@@ -141,6 +141,7 @@ def plot_statistics_for_graph(graph_results, pk_type):
     print_general_stats(graph_results, title=f'{pk_type} PageRank')
 
 def compare_graph_to_baseline(Dtest,Qtest,Rtest,threshold, priors):
+    p1.topics = topics
     try:
         p1_ranking = p1.evaluation(topics, (doc_index['p'], doc_index['n']), ('test', docs['test']),
                                    (p1.stem_analyzer,), (p1.NamedBM25F(K1=2, B=1),), skip_indexing=True)
