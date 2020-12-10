@@ -1,1 +1,1 @@
-To be run with main.py, all files for indexing are assumed to be in a folder called "collections".
+Each of the models has it's own file, classifier.py, clustering.py and graphIR. All files for indexing are assumed to be in a folder called "collections".
